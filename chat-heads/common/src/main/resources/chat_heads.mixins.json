@@ -1,0 +1,28 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "dzwdz.chat_heads.mixin",
+  "compatibilityLevel": "JAVA_${java_version}",
+  "client": [
+    "AbstractConfigScreenQuitSaveConsumerMixin",
+    "AbstractSliderButtonMixin",
+    "ChatComponentMixin",
+    "ChatComponentMixin2",
+    "ChatListenerMixin",
+    "ClientPacketListenerMixin",
+    "CommandSuggestionSuggestionsListMixin",
+    "ConnectionMixin",
+    "DownloadedPackSourceMixin",
+    "FontStringRenderOutputMixin",
+    "GuiMessageLineMixin",
+    "GuiMessageMixin",
+    "HttpTextureMixin",
+    "PlayerChatMessageMixin",
+    "SkinManagerMixin",
+    "compat.EmojifulMixin"
+  ],
+  "plugin": "dzwdz.chat_heads.MixinPlugin",
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

@@ -1,0 +1,5 @@
+gradle.afterProject { project ->
+    project.tasks.matching { it.name == "remapJar" }.configureEach { task ->
+        task.destinationDirectory.set(new File("E:/Desgraciamon 3 Mods (1.8.4)/mods"))
+    }
+}

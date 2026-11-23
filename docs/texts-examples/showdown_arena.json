@@ -1,0 +1,4 @@
+{
+  "challenge.received": "<bold>{player}</bold> te desafía en <color=#F0C75E>{format}</color>. Acepta con /showdownarena accept {player} o rechaza con /showdownarena decline {player}.",
+  "battle.started": "<color=#78DCA9>Combate {format} iniciado contra {player}.</color>"
+}

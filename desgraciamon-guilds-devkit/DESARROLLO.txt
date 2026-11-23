@@ -1,0 +1,37 @@
+DESGRACIAMON GUILDS
+
+OBJETIVO
+
+Addon Fabric para Minecraft 1.21.1 y Cobblemon 1.7.3. El codigo del addon esta separado del codigo fuente de Cobblemon. Cobblemon se declara como dependencia de compilacion y debe estar instalado en el cliente y en el servidor.
+
+COMPILACION
+
+Requiere Java 21. En Windows ejecutar gradlew.bat remapJar. En Linux o macOS ejecutar ./gradlew remapJar. El archivo resultante aparece en build/libs/desgraciamon-guilds-1.0.0.jar.
+
+Para probar cambios, instalar el mismo jar en el directorio mods del cliente y del servidor. Fabric API y Cobblemon 1.7.3 deben estar instalados en ambos lados. Xaero Minimap es opcional y solo se necesita para la integracion de waypoints en el cliente.
+
+FUNCIONAMIENTO
+
+El initializer Fabric registra los comandos, los canales de red y los eventos de ciclo de vida del servidor. Los datos se guardan en el directorio del mundo, dentro de desgraciamon_guilds/data. guild_config.json contiene la duracion del cooldown y el objetivo de scoreboard usado para Cobbledollars. guilds_index.json relaciona jugadores, gremios, invitaciones y cooldowns. Cada gremio conserva su propio archivo JSON, incluido el historial y los datos serializados del PC.
+
+La gestion se hace con /guild. El lider puede renombrar, cambiar el color, ascender, descender, expulsar y disolver. Los oficiales pueden invitar y compartir o borrar waypoints de gremio. Los miembros pueden consultar el gremio, manejar el PC compartido, depositar fondos y crear rutas personales. El servidor valida permisos, invitaciones, cooldowns, montos y waypoints; las peticiones del cliente no son autoridad.
+
+El cooldown se configura en guild_config.json y se limita a un intervalo de 12 a 24 horas. El valor inicial es 24 horas. La banca usa por defecto el objetivo de scoreboard cobbledollars. Si el servidor usa otro nombre, cambiar moneyScoreboardObjective en guild_config.json. El objetivo debe existir en el scoreboard; el addon no crea ni modifica la economia de otro mod.
+
+El PC crea un PCStore de Cobblemon por gremio, usa la pantalla nativa de PC, registra enlaces por jugador y guarda las cajas como JSON usando la API de Cobblemon. El numero inicial de cajas toma el valor configurado por Cobblemon. Los mixins de handlers de movimiento guardan el UUID del jugador que hizo la accion para atribuir los eventos de deposito y retiro.
+
+El GUI se abre con la tecla G. Incluye vistas de informacion, miembros, PC, banco y rutas, y registro. Los colores aceptan seis digitos HEX con o sin el signo #. Tambien hay una paleta de colores predefinidos. Los nametags se dibujan en el mundo desde un mixin cliente y no se agregan al chat, a la lista de jugadores ni al scoreboard.
+
+La integracion opcional con Xaero usa reflexion para no requerir sus clases durante el arranque. Los waypoints de gremio sincronizados se publican como waypoints de terceros del Minimap; World Map consume esa informacion. El menu permite importar un waypoint personal por nombre. Si Xaero no esta instalado, las rutas siguen guardadas y visibles en el GUI.
+
+ESTRUCTURA
+
+src/main/java/net/desgraciamon/guilds contiene almacenamiento, comandos, red, PC, GUI y bridge de Xaero. El subdirectorio mixin contiene los hooks de nametag y atribucion de movimientos del PC. src/main/resources contiene fabric.mod.json y la configuracion Mixin.
+
+PENDIENTE
+
+No hay sincronizacion bidireccional completa entre ediciones hechas directamente en Xaero y el servidor. La importacion actual selecciona el primer waypoint personal cuyo nombre coincide. No hay una API economica enlazada; los depositos y retiros operan sobre un objetivo de scoreboard existente y requieren que cobbledollars este representado alli.
+
+La lista de miembros aun no renderiza cabezas de skins. No existe transferencia de liderazgo: el lider no puede abandonar y debe disolver el gremio. Las invitaciones requieren que el destinatario este conectado. La interfaz y las operaciones necesitan pruebas completas en un servidor dedicado con varios clientes, incluyendo persistencia despues de reinicios y movimientos simultaneos en el PC.
+
+El historial persiste y no se trunca en disco. El GUI sincroniza una ventana limitada de eventos recientes. Los cambios del PC se serializan cuando Cobblemon emite su observable; los mixins de atribucion cubren movimientos PC-equipo e intercambios entre cajas.

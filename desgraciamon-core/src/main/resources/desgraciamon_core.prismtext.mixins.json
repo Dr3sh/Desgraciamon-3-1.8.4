@@ -1,0 +1,14 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.desgraciamon.prismtext.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "StringRenderOutputMixin",
+    "ScreenMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
+

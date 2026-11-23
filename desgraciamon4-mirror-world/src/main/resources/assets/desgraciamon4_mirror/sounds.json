@@ -1,0 +1,20 @@
+{
+  "memory_fade": {
+    "category": "player",
+    "sounds": [
+      {
+        "name": "desgraciamon4_mirror:memory_fade",
+        "stream": false
+      }
+    ]
+  },
+  "memory_arrive": {
+    "category": "player",
+    "sounds": [
+      {
+        "name": "desgraciamon4_mirror:memory_arrive",
+        "stream": false
+      }
+    ]
+  }
+}

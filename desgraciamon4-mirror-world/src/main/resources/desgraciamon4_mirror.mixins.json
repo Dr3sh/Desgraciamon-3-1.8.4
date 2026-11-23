@@ -1,0 +1,22 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.desgraciamon.mirror.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "ExplosionMixin",
+    "ServerLevelMixin",
+    "ServerPlayerDropMixin"
+  ],
+  "client": [
+    "GameRendererAccessor",
+    "GameRendererMixin",
+    "LevelRendererMixin",
+    "PokemonRendererMixin",
+    "PostChainAccessor",
+    "SoundEngineMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

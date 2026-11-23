@@ -1,0 +1,20 @@
+{
+  "dialga.ambient": {
+    "subtitle": "subtitles.desgraciamon.dialga.ambient",
+    "sounds": [
+      {
+        "name": "desgraciamon4_special_effects:dialga_loop",
+        "stream": true
+      }
+    ]
+  },
+  "palkia.ambient": {
+    "subtitle": "subtitles.desgraciamon.palkia.ambient",
+    "sounds": [
+      {
+        "name": "desgraciamon4_special_effects:palkia_loop",
+        "stream": true
+      }
+    ]
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "link.message": "<color=#55FFFF>Código Discord:</color> {code}. En Discord usa /vincular codigo:{code} dentro de los próximos 10 minutos.",
+  "privacy.enabled": "<bold><color=#F26D6D>Tu equipo ahora es privado en Discord.</color></bold> Solo tú puedes consultarlo con /equipo.",
+  "discord.linked": "Cuenta vinculada a {player}. Ya puedes usar /legendarios y /cooldown.",
+  "team.title": "{shiny}{slot}. {name} · Nv. {level}",
+  "team.description": "**Especie:** {species}{nickname}\n**Estado:** {status}\n**Género:** {gender} · **Naturaleza:** {nature}{form}\n**PS:** {health}/{maxHealth}"
+}

@@ -1,0 +1,14 @@
+{
+  "required": true,
+  "package": "com.desgraciamon.videomenu.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "TitleScreenMixin",
+    "PanoramaRendererMixin",
+    "CubeMapMixin",
+    "LoadingOverlayMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

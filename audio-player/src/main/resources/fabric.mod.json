@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "id": "audioplayer",
+  "version": "${mod_version}",
+  "name": "AudioPlayer",
+  "description": "Audio Player",
+  "authors": [
+    "Max Henkel"
+  ],
+  "contact": {
+    "website": "https://modrepo.de"
+  },
+  "license": "All Rights Reserved",
+  "icon": "icon.png",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "de.maxhenkel.audioplayer.AudioPlayer"
+    ],
+    "voicechat": [
+      "de.maxhenkel.audioplayer.Plugin"
+    ]
+  },
+  "mixins": [
+    "audioplayer.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": "${fabric_loader_dependency}",
+    "minecraft": [
+      "1.21",
+      "1.21.1"
+    ],
+    "voicechat": ">=1.21-2.3.3"
+  },
+  "breaks": {
+    "fabric-api": "${fabric_api_dependency_breaks}"
+  },
+  "accessWidener": "audioplayer.accesswidener"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "desgraciamon4_mirror:memory",
+  "generator": {
+    "type": "minecraft:flat",
+    "settings": {
+      "biome": "desgraciamon4_mirror:memory",
+      "features": false,
+      "lakes": false,
+      "layers": [
+        { "block": "minecraft:air", "height": 1 }
+      ],
+      "structure_overrides": []
+    }
+  }
+}
+

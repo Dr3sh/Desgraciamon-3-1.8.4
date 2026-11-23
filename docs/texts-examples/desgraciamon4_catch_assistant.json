@@ -1,0 +1,6 @@
+{
+  "capture.notice": "<color=#69D99A><bold>{player}</bold></color> capturó a <italic>{species}</italic> ({form})",
+  "status.cooldown_done": "<color=#75D6A0>Cooldown completado</color>",
+  "discord.content": "{identity} capturó **{pokemon}** ({status}).",
+  "discord.footer": "Desgraciamon 3 · Capturas legendarias y míticas"
+}

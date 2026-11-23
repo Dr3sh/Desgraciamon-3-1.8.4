@@ -1,0 +1,30 @@
+{
+    "targets": [
+        { "name": "bloom_a", "width": 640, "height": 360 },
+        { "name": "bloom_b", "width": 640, "height": 360 }
+    ],
+    "passes": [
+        {
+            "name": "showdown_arena:arena_bright",
+            "intarget": "minecraft:main",
+            "outtarget": "bloom_a"
+        },
+        {
+            "name": "showdown_arena:arena_blur",
+            "intarget": "bloom_a",
+            "outtarget": "bloom_b",
+            "uniforms": [
+                { "name": "BlurDir", "values": [ 1.0, 0.0 ] }
+            ]
+        },
+        {
+            "name": "showdown_arena:arena_blur_add",
+            "intarget": "bloom_b",
+            "outtarget": "minecraft:main",
+            "uniforms": [
+                { "name": "BlurDir", "values": [ 0.0, 1.0 ] },
+                { "name": "BloomIntensity", "values": [ 0.55 ] }
+            ]
+        }
+    ]
+}

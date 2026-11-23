@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "id": "desgraciamon_guilds",
+  "version": "1.0.1",
+  "name": "Desgraciamon Guilds",
+  "description": "Guild management for Cobblemon servers.",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "net.desgraciamon.guilds.DesgraciamonGuilds"
+    ],
+    "client": [
+      "net.desgraciamon.guilds.DesgraciamonGuildsClient"
+    ]
+  },
+  "mixins": [
+    "desgraciamon_guilds.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": "\u003e\u003d0.15.0",
+    "fabric-api": "*",
+    "minecraft": "1.21.1",
+    "java": "\u003e\u003d21",
+    "cobblemon": "\u003e\u003d1.7.3",
+    "cobbledollars": "*"
+  }
+}

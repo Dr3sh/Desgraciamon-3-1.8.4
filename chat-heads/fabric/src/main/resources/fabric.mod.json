@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "id": "chat_heads",
+  "version": "${mod_version}",
+  "name": "Chat Heads",
+  "description": "See who are you chatting with!\nThis mod adds player heads next to their chat messages.",
+  "authors": [
+    "dzwdz",
+    "Fourmisain"
+  ],
+  "contact": {
+    "sources": "https://github.com/dzwdz/chat_heads"
+  },
+  "license": "MPL-2.0",
+  "icon": "assets/chat_heads/icon.png",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "dzwdz.chat_heads.fabric.ChatHeadsFabric"
+    ],
+    "modmenu": [
+      "dzwdz.chat_heads.fabric.config.ModMenuImpl"
+    ]
+  },
+  "mixins": [
+    "chat_heads.mixins.json",
+    "chat_heads.fabric.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": "${fabric_loader_version_range}",
+    "minecraft": "${fabric_game_version_range}"
+  },
+  "suggests": {
+    "cloth-config": "*"
+  },
+  "custom": {
+    "modupdater": {
+      "strategy": "curseforge",
+      "projectID": 407206
+    }
+  }
+}

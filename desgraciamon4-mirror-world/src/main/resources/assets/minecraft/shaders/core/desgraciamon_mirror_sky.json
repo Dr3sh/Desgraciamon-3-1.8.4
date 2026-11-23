@@ -1,0 +1,22 @@
+{
+    "blend": {
+        "func": "add",
+        "srcrgb": "srcalpha",
+        "dstrgb": "1-srcalpha"
+    },
+    "vertex": "desgraciamon_mirror_sky",
+    "fragment": "desgraciamon_mirror_sky",
+    "attributes": [
+        "Position"
+    ],
+    "samplers": [],
+    "uniforms": [
+        { "name": "ModelViewMat",     "type": "matrix4x4", "count": 16, "values": [ 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0 ] },
+        { "name": "ProjMat",          "type": "matrix4x4", "count": 16, "values": [ 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0 ] },
+        { "name": "SkyRotMat",        "type": "matrix4x4", "count": 16, "values": [ 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0 ] },
+        { "name": "Time",             "type": "float",     "count": 1,  "values": [ 0.0 ] },
+        { "name": "OvercastDensity",  "type": "float",     "count": 1,  "values": [ 0.85 ] },
+        { "name": "SunDir",           "type": "float",     "count": 3,  "values": [ 0.55, 0.65, -0.52 ] },
+        { "name": "SkyTint",          "type": "float",     "count": 3,  "values": [ 1.0, 1.0, 1.0 ] }
+    ]
+}

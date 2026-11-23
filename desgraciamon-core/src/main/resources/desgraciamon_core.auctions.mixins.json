@@ -1,0 +1,13 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.desgraciamon.auctions.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "EntityAuctionMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
+

@@ -1,0 +1,4 @@
+{
+  "mission.completed": "<color=#78DCA9><bold>Misión completada:</bold></color> {title}. Reclama tu recompensa en la bandeja.",
+  "mission.claim": "<bold><color=#FFD04E>Reclamar recompensa</color></bold>"
+}

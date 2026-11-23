@@ -1,0 +1,12 @@
+{
+  "required": true,
+  "package": "com.addoncobblemon.legendarycooldown.mixin",
+  "refmap": "desgraciamon4-gameplay-refmap.json",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "EmptyPokeBallEntityMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "id": "showdown_arena",
+  "version": "${version}",
+  "name": "Desgraciamon 3 Combats",
+  "description": "Combates competitivos PvP y practica contra IA con equipos generados al estilo Showdown.",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "com.desgraciamon.showdownarena.ShowdownArenaMod"
+    ],
+    "client": [
+      "com.desgraciamon.showdownarena.ShowdownArenaClient"
+    ],
+    "voicechat": [
+      "com.desgraciamon.showdownarena.ShowdownVoicechatPlugin"
+    ]
+  },
+  "mixins": [
+    "showdown_arena.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=0.16.0",
+    "fabric-api": "*",
+    "fabric-language-kotlin": ">=1.13.6",
+    "minecraft": "~1.21.1",
+    "java": ">=21",
+    "cobblemon": "~1.8.4"
+  }
+}

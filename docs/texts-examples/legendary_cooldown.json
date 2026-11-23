@@ -1,0 +1,4 @@
+{
+  "cooldown.blocked": "<color=#F26D6D>No puedes capturar otro Pokémon legendario todavía.</color> Tiempo restante: <bold>{time}</bold>",
+  "bossbar.title": "Próxima captura legendaria: <color=#FFD166>{time}</color>"
+}

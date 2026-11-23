@@ -1,0 +1,5 @@
+{
+  "discord.relay": "<color=#63C7F2>[Discord]</color> <bold>{sender}</bold>: {message}",
+  "discord.minecraft_message": "**{player}:** {message}",
+  "screenshot.sending": "<italic>Enviando captura al chat y a Discord...</italic>"
+}

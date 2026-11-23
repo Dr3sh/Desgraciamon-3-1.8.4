@@ -1,0 +1,19 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.desgraciamon.customnames.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "PlayerNameMixin",
+    "ServerPlayerTabListMixin",
+    "PlayerListNickMixin",
+    "CommandSourceStackMixin",
+    "EntitySelectorParserMixin"
+  ],
+  "client": [
+    "GuiTabListMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

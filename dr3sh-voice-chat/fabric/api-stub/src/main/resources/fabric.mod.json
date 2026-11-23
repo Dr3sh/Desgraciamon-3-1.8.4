@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "id": "voicechat_api",
+  "version": "${api_version}",
+  "name": "Dr3sh Studios Voice Chat API",
+  "authors": [
+    "Max Henkel"
+  ],
+  "contact": {
+    "homepage": "https://voicechat.modrepo.de/"
+  },
+  "icon": "icon.png",
+  "environment": "*",
+  "custom": {
+    "modmenu": {
+      "badges": [
+        "library"
+      ],
+      "parent": {
+        "id": "voicechat"
+      }
+    }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "required": false,
+  "package": "com.desgraciamon.economy.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "SellHandlerMixin"
+  ],
+  "client": [
+    "BankScreenMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

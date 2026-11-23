@@ -1,0 +1,11 @@
+pluginManagement {
+    repositories {
+        gradlePluginPortal()
+        maven("https://maven.fabricmc.net/")
+    }
+}
+
+rootProject.name = "desgraciamon4-mirror-world"
+
+apply(from = "../gradle/jar-output.init.gradle")
+

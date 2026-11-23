@@ -1,0 +1,737 @@
+package dzwdz.chat_heads;
+
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import com.mojang.authlib.GameProfile;
+import com.mojang.authlib.properties.Property;
+import com.mojang.blaze3d.platform.NativeImage;
+import dzwdz.chat_heads.mixininterface.TextureLocationSettable;
+import net.minecraft.client.renderer.texture.HttpTexture;
+import net.minecraft.client.resources.DefaultPlayerSkin;
+import java.io.File;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.util.concurrent.ConcurrentHashMap;
+import com.mojang.blaze3d.systems.RenderSystem;
+import dzwdz.chat_heads.config.ChatHeadsConfig;
+import dzwdz.chat_heads.config.ChatHeadsConfigDefaults;
+import dzwdz.chat_heads.config.ClothConfigCommonImpl;
+import dzwdz.chat_heads.mixininterface.HeadRenderable;
+import dzwdz.chat_heads.mixininterface.Ownable;
+import net.minecraft.client.GuiMessage;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.client.multiplayer.ClientPacketListener;
+import net.minecraft.client.multiplayer.PlayerInfo;
+import net.minecraft.client.player.AbstractClientPlayer;
+import net.minecraft.client.renderer.entity.LivingEntityRenderer;
+import net.minecraft.network.chat.*;
+import net.minecraft.network.chat.contents.TranslatableContents;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.util.FastColor;
+import net.minecraft.util.FastColor.ARGB32;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.entity.player.PlayerModelPart;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
+
+import java.util.*;
+import java.util.function.BiConsumer;
+import java.util.function.BooleanSupplier;
+import java.util.regex.Pattern;
+import java.util.stream.Stream;
+
+import static dzwdz.chat_heads.config.RenderPosition.BEFORE_LINE;
+import static dzwdz.chat_heads.config.SenderDetection.HEURISTIC_ONLY;
+import static dzwdz.chat_heads.config.SenderDetection.UUID_ONLY;
+import static net.minecraft.network.chat.ClickEvent.Action.SUGGEST_COMMAND;
+
+/*
+ * small changes in 1.20.5:
+ *
+ * addMessage(Component, MessageSignature, int, GuiMessageTag, boolean refreshing)
+ * was split into
+ * addMessageToDisplayQueue(GuiMessage)
+ * addMessageToQueue(GuiMessage)
+ * the latter was previously run when refreshing = false
+ *
+ *
+ * Call stack looks roughly like this:
+ *
+ * ClientPacketListener.handlePlayerChat()
+ *  -> ChatListener.handlePlayerChatMessage(), note: doesn't take PlayerInfo but GameProfile instead
+ *  -> ChatListener.showMessageToPlayer()
+ *  -> ChatComponent.addMessage(), new GuiMessage()
+ *  -> ChatComponent.addMessageToDisplayQueue()
+ *  -> new GuiMessage.Line()
+ *
+ * ClientPacketListener.handleDisguisedChat()
+ *  -> ChatListener.handleDisguisedChatMessage()
+ *  -> ChatComponent.addMessage(), new GuiMessage()
+ *  -> ChatComponent.addMessageToDisplayQueue()
+ *  -> new GuiMessage.Line()
+ *
+ * ClientPacketListener.handleSystemChat()
+ *  -> ChatListener.handleSystemMessage()
+ *  -> ChatComponent.addMessage(), new GuiMessage()
+ *  -> ChatComponent.addMessageToDisplayQueue()
+ *  -> new GuiMessage.Line()
+ *
+ * FreedomChat (https://github.com/Oharass/FreedomChat) will likely work the same as before, converting chat messages
+ * to system messages, so we still handle those.
+ */
+
+public class ChatHeads {
+    public static final String MOD_ID = "chat_heads";
+    public static final Pattern FORMAT_REGEX = Pattern.compile("(?i)§.|</?(?:color|prism|gradient)[^>]*>");
+    private static final Map<String, ResourceLocation> CUSTOM_SKIN_TEXTURES = new ConcurrentHashMap<>();
+    private static volatile boolean customNamesChecked = false;
+    private static java.lang.reflect.Method customNamesGetPlainMethod = null;
+    public static final Logger LOGGER = LogManager.getLogger(MOD_ID);
+    public static final ResourceLocation DISABLE_RESOURCE = ResourceLocation.fromNamespaceAndPath(MOD_ID, "disable");
+
+    public static ChatHeadsConfig CONFIG = new ChatHeadsConfigDefaults();
+
+    @NotNull public static HeadData lastSenderData = HeadData.EMPTY;
+
+    // with Compact Chat, addMessageToDisplayQueue() calls refreshTrimmedMessage() and thus addMessageToDisplayQueue() with another owner inside itself,
+    // we hence need two separate owner variables, distinguished by 'refreshing'
+    public static boolean refreshing;
+    @NotNull public static HeadData lineData = HeadData.EMPTY;
+    @NotNull public static HeadData refreshingLineData = HeadData.EMPTY;
+
+    public static volatile boolean serverSentUuid = false;
+    public static volatile boolean serverDisabledChatHeads = false;
+
+    public static final Set<ResourceLocation> blendedHeadTextures = new HashSet<>();
+
+    // for "before name" rendering:
+    public static GuiGraphics guiGraphics;
+    @NotNull public static HeadData renderHeadData = HeadData.EMPTY;
+    public static float renderHeadOpacity;
+    // with TalkArea, a single drawString call is replaced with multiple, we thus count all rendered (shadow) characters from before the original call to just after
+    public static int renderedChars = 0;
+    public static int renderedShadowChars = 0;
+
+    public static boolean forceBeforeLine;
+    private static final Map<String, BooleanSupplier> beforeNameIncompatibility = Map.of(
+            "caxton", () -> true,
+            "modernui", () -> {
+                try {
+                    Class<?> modernUi;
+                    try {
+                        modernUi = Class.forName("icyllis.modernui.mc.ModernUIMod");
+                    } catch (ClassNotFoundException e) {
+                        // old Forge versions
+                        modernUi = Class.forName("icyllis.modernui.mc.forge.ModernUIForge");
+                    }
+
+                    return (Boolean) modernUi.getMethod("isTextEngineEnabled").invoke(null);
+                } catch (Exception e) {
+                    LOGGER.warn("couldn't invoke isTextEngineEnabled: {}: {}", e.getClass().getSimpleName(), e.getMessage());
+                    return false;
+                }
+            }
+    );
+
+    public static void init() {
+        for (var entry : beforeNameIncompatibility.entrySet()) {
+            String modId = entry.getKey();
+
+            if (Compat.isModLoaded(modId) && entry.getValue().getAsBoolean()) {
+                forceBeforeLine = true;
+                ChatHeads.LOGGER.warn("disabled \"Before Name\" rendermode due to incompatibility with {}", modId);
+            }
+        }
+
+        if (Compat.isClothConfigLoaded()) {
+            ClothConfigCommonImpl.loadConfig();
+        }
+    }
+
+    @NotNull
+    public static HeadData getLineData() {
+        return refreshing ? refreshingLineData : lineData;
+    }
+
+    public static void setLineData(@NotNull HeadData headData) {
+        if (refreshing) {
+            refreshingLineData = headData;
+        } else {
+            lineData = headData;
+        }
+    }
+
+    // On EssentialsX, /realname returns "<nickname> is <profile name>", which we can use to auto-add name aliases
+    public static void autoDetectAlias(Component message) {
+        String text = message.getString();
+
+        int i = text.indexOf(" ");
+        if (i == -1) return;
+
+        var nickname = text.substring(0, i);
+
+        if (!text.substring(i).startsWith(" is "))
+            return;
+
+        var profileName = text.substring(i + " is ".length());
+
+        if (profileName.contains(" "))
+            return;
+
+        ChatHeads.CONFIG.addNameAlias(nickname, profileName);
+    }
+
+    public static void handleAddedMessage(Component message, @Nullable ChatType.Bound bound, @Nullable PlayerInfo playerInfo) {
+        if (ChatHeads.CONFIG.detectNameAliases())
+            autoDetectAlias(message);
+
+        if (ChatHeads.serverDisabledChatHeads) {
+            ChatHeads.lastSenderData = HeadData.EMPTY;
+            return;
+        }
+
+        // note: while this may get us a head position, the message may be modified (e.g. by Chat Timestamps)
+        // we hence update the position at the last possible moment, see chatheads$updateHeadPosition
+        ChatHeads.lastSenderData = detectPlayer(message, bound, playerInfo);
+    }
+
+    @NotNull
+    private static HeadData detectPlayer(Component message, @Nullable ChatType.Bound bound, @Nullable PlayerInfo playerInfo) {
+        HeadData headData = detectShowcaseItemMessage(message);
+        if (headData != null) return headData;
+
+        if (ChatHeads.CONFIG.senderDetection() != HEURISTIC_ONLY) {
+            if (playerInfo != null) {
+                ChatHeads.serverSentUuid = true;
+                return HeadData.of(playerInfo);
+            }
+
+            // no PlayerInfo/UUID, message is either not from a player or the server didn't wanna tell
+
+            if (ChatHeads.CONFIG.senderDetection() == UUID_ONLY || ChatHeads.serverSentUuid && ChatHeads.CONFIG.smartHeuristics()) {
+                return HeadData.EMPTY;
+            }
+        }
+
+        return ChatHeads.detectPlayerByHeuristic(message, bound);
+    }
+
+    @Nullable
+    private static HeadData detectShowcaseItemMessage(Component message) {
+        if (message.getContents() instanceof TranslatableContents contents
+                && Objects.equals(contents.getKey(), "showcaseitem.misc.shared_item")
+                && contents.getArgs().length > 0) {
+            var connection = Minecraft.getInstance().getConnection();
+            if (connection == null)
+                return null;
+
+            String playerName;
+            if (contents.getArgs()[0] instanceof String s) {
+                playerName = s;
+            } else if (contents.getArgs()[0] instanceof Component c) {
+                playerName = c.getString();
+            } else {
+                return null;
+            }
+
+            var playerInfoCache = new PlayerInfoCache(connection);
+            playerInfoCache.collectAllNames();
+
+            return HeadData.of(playerInfoCache.get(playerName));
+        }
+
+        return null;
+    }
+
+    @NotNull
+    public static HeadData getHeadData(@NotNull GuiMessage.Line guiMessage) {
+        return ((HeadRenderable) (Object) guiMessage).chatheads$getHeadData();
+    }
+
+    @NotNull
+    public static HeadData getHeadData(@NotNull GuiMessage guiMessage) {
+        return ((HeadRenderable) (Object) guiMessage).chatheads$getHeadData();
+    }
+
+    @Nullable
+    public static PlayerInfo getOwner(@NotNull PlayerChatMessage message) {
+        return ((Ownable) (Object) message).chatheads$getOwner();
+    }
+
+    public static void setHeadData(@NotNull GuiMessage guiMessage, @NotNull HeadData data) {
+        ((HeadRenderable) (Object) guiMessage).chatheads$setHeadData(data);
+    }
+
+    public static void setOwner(@NotNull PlayerChatMessage message, PlayerInfo owner) {
+        ((Ownable) (Object) message).chatheads$setOwner(owner);
+    }
+
+    public static boolean offsetChat(@NotNull HeadData headData) {
+        if (ChatHeads.CONFIG.renderPosition() != BEFORE_LINE)
+            return false;
+
+        return headData != HeadData.EMPTY || (ChatHeads.CONFIG.offsetNonPlayerText() && !ChatHeads.serverDisabledChatHeads);
+    }
+
+    public static int getChatOffset(@NotNull GuiMessage.Line guiMessage) {
+        return getChatOffset(getHeadData(guiMessage));
+    }
+
+    public static int getChatOffset(@NotNull HeadData headData) {
+        return offsetChat(headData) ? headWidth() : 0;
+    }
+
+    public static int getTextWidthDifference(@NotNull GuiMessage.Line guiMessage) {
+        return getTextWidthDifference(getHeadData(guiMessage));
+    }
+
+    public static int getTextWidthDifference(@NotNull HeadData headData) {
+        // whenever a head is rendered or chat is being offset
+        return (headData != HeadData.EMPTY || offsetChat(headData)) ? headWidth() : 0;
+    }
+
+    public static int headWidth() {
+        return headWidth(ChatHeads.CONFIG.drawShadow());
+    }
+
+    // pixels the head takes up (including padding)
+    public static int headWidth(boolean drawShadow) {
+        return 8 + 2 + (drawShadow ? 1 : 0);
+    }
+
+    /** Heuristic to detect the sender of a message, needed if there's no sender UUID */
+    @NotNull
+    public static HeadData detectPlayerByHeuristic(Component message, @Nullable ChatType.Bound bound) {
+        var connection = Minecraft.getInstance().getConnection();
+
+        // When Polymer's early play networking API is used, messages can be received pre-login, in which case we disable chat heads
+        if (connection == null) {
+            return HeadData.EMPTY;
+        }
+
+        Component sender = getSenderDecoration(bound);
+
+        var playerInfoCache = new PlayerInfoCache(connection);
+        playerInfoCache.collectProfileNames();
+
+        // StyledNicknames compatibility: try to get player info from /tell click event
+        PlayerInfo player = getTellReceiver(sender != null ? sender : message).map(playerInfoCache::get).orElse(null);
+        if (player != null) {
+            return HeadData.of(player);
+        }
+
+        playerInfoCache.collectAllNames();
+
+        // try to get player info only from the sender decoration
+        if (sender != null) {
+            String cleanSender = FORMAT_REGEX.matcher(sender.getString()).replaceAll("");
+            return HeadData.of(playerInfoCache.get(cleanSender));
+        } else {
+            return scanForPlayerName(message.getString(), playerInfoCache);
+        }
+    }
+
+    private static Optional<String> getTellReceiver(Component component) {
+        return component.visit((style, string) -> {
+            ClickEvent clickEvent = style.getClickEvent();
+
+            if (clickEvent != null && clickEvent.getAction() == SUGGEST_COMMAND) {
+                String cmd = clickEvent.getValue();
+
+                //noinspection ConstantValue  can apparently be null, see issue #112
+                if (cmd != null && cmd.startsWith("/tell ")) {
+                    String name = cmd.substring("/tell ".length()).trim();
+                    return Optional.of(name);
+                }
+            }
+
+            return Optional.empty();
+        }, Style.EMPTY);
+    }
+
+    @Nullable
+    private static Component getSenderDecoration(@Nullable ChatType.Bound bound) {
+        if (bound == null) return null;
+
+        for (var param : bound.chatType().value().chat().parameters()) {
+            if (param == ChatTypeDecoration.Parameter.SENDER) {
+                return bound.name();
+            }
+        }
+
+        return null;
+    }
+
+    @NotNull
+    public static HeadData scanForPlayerName(@NotNull String message, PlayerInfoCache playerInfoCache) {
+        message = FORMAT_REGEX.matcher(message).replaceAll("");
+
+        // large optimization: prepare a names lookup to improve worst case runtime of the following triple nested loop
+        var namesByFirstCharacter = playerInfoCache.createNamesByFirstCharacterMap();
+
+        boolean insideWord = false;
+
+        // scan through the message code point by code point
+        int[] messageSeq = message.codePoints().toArray();
+        for (int i = 0; i < messageSeq.length; i++) {
+            int c = messageSeq[i];
+
+            // don't match words inside words ("tom" shouldn't match "custom")
+            if (insideWord && isWordCharacter(c))
+                continue; // note: don't need to update insideWord
+
+            // try to match with names starting with the given character
+            for (var name : namesByFirstCharacter.getOrDefault(c, List.of())) {
+                int[] nameSeq = name.codePoints().toArray();
+
+                // nothing left to match
+                if (i + nameSeq.length-1 >= messageSeq.length)
+                    continue;
+
+                // don't match word ending with more word characters ("tom" shouldn't match "tomato")
+                boolean nameEndsAsWord = isWordCharacter(nameSeq[nameSeq.length - 1]);
+                boolean nameIsFollowedByWord = i + nameSeq.length < messageSeq.length && isWordCharacter(messageSeq[i + nameSeq.length]);
+                if (nameEndsAsWord && nameIsFollowedByWord)
+                    continue;
+
+                if (containsSubsequenceAt(messageSeq, i, nameSeq)) {
+                    return new HeadData(playerInfoCache.get(name), i);
+                }
+            }
+
+            insideWord = isWordCharacter(c);
+        }
+
+        return HeadData.EMPTY;
+    }
+
+    public static class PlayerInfoCache {
+        private final ClientPacketListener connection;
+        private final Map<String, PlayerInfo> playerInfos = new HashMap<>();
+        private boolean collectedProfileNames = false;
+        private boolean collectedEverything = false;
+
+        public PlayerInfoCache(@NotNull ClientPacketListener connection) {
+            this.connection = connection;
+        }
+
+        // TAB plugin's layout feature adds a bunch of fake PlayerInfos with names |slot_11 - |slot_90 and UUIDs 1-80
+        private Stream<PlayerInfo> getRealOnlinePlayers() {
+            return connection.getOnlinePlayers().stream().filter(playerInfo -> !playerInfo.getProfile().getName().startsWith("|slot_"));
+        }
+
+        public void collectProfileNames() {
+            if (collectedProfileNames) return;
+            collectedProfileNames = true;
+
+            getRealOnlinePlayers().forEach(this::addProfileName);
+        }
+
+        private void addProfileName(PlayerInfo playerInfo) {
+            // plugins like HaoNick can change profile names to contain illegal characters like formatting codes
+            String profileName = FORMAT_REGEX.matcher(playerInfo.getProfile().getName()).replaceAll("");
+            if (!profileName.isEmpty()) {
+                playerInfos.put(profileName, playerInfo);
+            }
+            String customNick = lookupCustomNamePlain(playerInfo.getProfile().getId());
+            if (customNick != null) {
+                String cleanNick = FORMAT_REGEX.matcher(customNick).replaceAll("").trim();
+                if (!cleanNick.isEmpty()) {
+                    playerInfos.putIfAbsent(cleanNick, playerInfo);
+                }
+            }
+        }
+
+        public void collectAllNames() {
+            if (collectedEverything) return;
+            collectedEverything = true;
+
+            collectProfileNames();
+
+            // collect display names
+            getRealOnlinePlayers().forEach(this::addDisplayName);
+
+            // add name aliases, copying player info from profile/display names
+            addNameAliases();
+        }
+
+        private void addNameAliases() {
+            for (var entry : CONFIG.getNameAliases().entrySet()) {
+                PlayerInfo playerInfo = playerInfos.get(entry.getValue());
+                if (playerInfo != null) {
+                    playerInfos.putIfAbsent(entry.getKey(), playerInfo);
+                }
+            }
+        }
+
+        private void addDisplayName(PlayerInfo playerInfo) {
+            if (playerInfo.getTabListDisplayName() != null) {
+                String displayName = FORMAT_REGEX.matcher(playerInfo.getTabListDisplayName().getString()).replaceAll("");
+                if (displayName.isEmpty() || displayName.equals(" "))
+                    return;
+
+                playerInfos.putIfAbsent(displayName, playerInfo);
+            }
+        }
+
+        public void add(PlayerInfo playerInfo) {
+            addProfileName(playerInfo);
+            addDisplayName(playerInfo);
+            addNameAliases();
+        }
+
+        public Map<Integer, List<String>> createNamesByFirstCharacterMap() {
+            Map<Integer, List<String>> namesByFirstCharacter = new HashMap<>();
+
+            for (var name : playerInfos.keySet()) {
+                namesByFirstCharacter.compute(name.codePointAt(0), (key, value) -> {
+                    if (value == null) value = new ArrayList<>();
+                    value.add(name);
+                    return value;
+                });
+            }
+
+            return namesByFirstCharacter;
+        }
+
+        @Nullable
+        public PlayerInfo get(@NotNull String name) {
+            return playerInfos.get(name);
+        }
+
+        public Set<String> getNames() {
+            return playerInfos.keySet();
+        }
+    }
+
+    private static boolean isWordCharacter(int codePoint) {
+        return Character.isLetterOrDigit(codePoint) || codePoint == '_' || Character.getNumericValue(codePoint) != -1;
+    }
+
+    private static boolean containsSubsequenceAt(int[] sequence, int startIndex, int[] subsequence) {
+        // assumes startIndex + sequence.length-1 < subsequence.length
+
+        for (int j = 0; j < subsequence.length; j++) {
+            if (sequence[startIndex + j] != subsequence[j]) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    public static NativeImage extractBlendedHead(NativeImage skin) {
+        // workaround for CustomSkinLoader. at this point legacy skins are normally already converted to squares, but this appears to have broken in 1.21.4
+        boolean isLegacy = skin.getWidth() / 2 == skin.getHeight();
+
+        // vanilla skins are 64x64 pixels, HD skins (e.g. with CustomSkinLoader) 128x128
+        int xScale = skin.getWidth() / 64;
+        int yScale = skin.getHeight() / (isLegacy ? 32 : 64);
+
+        NativeImage head = new NativeImage(8 * xScale, 8 * yScale, false);
+
+        for (int y = 0; y < head.getHeight(); y++) {
+            for (int x = 0; x < head.getWidth(); x++) {
+                int headColor = skin.getPixelRGBA(8 * xScale + x, 8 * yScale + y);
+                int hatColor = skin.getPixelRGBA(40 * xScale + x, 8 * yScale + y);
+
+                // blend layers together
+                head.setPixelRGBA(x, y, headColor);
+                head.blendPixel(x, y, hatColor);
+            }
+        }
+
+        return head;
+    }
+
+    public static ResourceLocation getBlendedHeadLocation(ResourceLocation skinLocation) {
+        return ResourceLocation.fromNamespaceAndPath(ChatHeads.MOD_ID, skinLocation.getPath());
+    }
+
+    public static void renderChatHead(GuiGraphics guiGraphics, int x, int y, PlayerInfo owner, float opacity) {
+        renderChatHead(guiGraphics, x, y, owner, opacity, ChatHeads.CONFIG.drawShadow());
+    }
+
+    @Nullable
+    private static String lookupCustomNamePlain(@Nullable UUID uuid) {
+        if (!customNamesChecked) {
+            customNamesChecked = true;
+            try {
+                Class<?> cls = Class.forName("com.desgraciamon.customnames.CustomNamesClient");
+                customNamesGetPlainMethod = cls.getMethod("getPlain", UUID.class);
+            } catch (Throwable ignored) {
+            }
+        }
+        if (customNamesGetPlainMethod == null || uuid == null) return null;
+        try {
+            return (String) customNamesGetPlainMethod.invoke(null, uuid);
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    @Nullable
+    private static String extractSkinUrl(GameProfile profile) {
+        try {
+            Collection<Property> props = profile.getProperties().get("textures");
+            if (props == null || props.isEmpty()) return null;
+            for (Property prop : props) {
+                String val = prop.value();
+                if (val == null || val.isBlank()) continue;
+                String decoded = new String(Base64.getDecoder().decode(val.trim()), StandardCharsets.UTF_8);
+                JsonObject root = JsonParser.parseString(decoded).getAsJsonObject();
+                JsonObject textures = root.getAsJsonObject("textures");
+                if (textures == null) continue;
+                JsonObject skin = textures.getAsJsonObject("SKIN");
+                if (skin == null || !skin.has("url")) continue;
+                String url = skin.get("url").getAsString();
+                if (url != null && !url.isBlank()) return url.trim();
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
+    }
+
+    private static String sanitizeTextureKey(String input) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] digest = md.digest(input.getBytes(StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder(digest.length * 2);
+            for (byte b : digest) {
+                sb.append(String.format("%02x", b));
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            return Integer.toHexString(input.hashCode());
+        }
+    }
+
+    private static ResourceLocation resolveSkinLocation(PlayerInfo owner, @Nullable Player player) {
+        ResourceLocation skinLocation = owner.getSkin().texture();
+        if (skinLocation != null && !skinLocation.getPath().startsWith("textures/entity/player/")) {
+            return skinLocation;
+        }
+
+        if (player instanceof AbstractClientPlayer clientPlayer) {
+            ResourceLocation entitySkin = clientPlayer.getSkin().texture();
+            if (entitySkin != null && !entitySkin.getPath().startsWith("textures/entity/player/")) {
+                return entitySkin;
+            }
+        }
+
+        GameProfile profile = owner.getProfile();
+        if (profile == null) {
+            return skinLocation;
+        }
+
+        ResourceLocation insecureSkin = Minecraft.getInstance().getSkinManager().getInsecureSkin(profile).texture();
+        if (insecureSkin != null && !insecureSkin.getPath().startsWith("textures/entity/player/")) {
+            return insecureSkin;
+        }
+
+        String skinUrl = extractSkinUrl(profile);
+        if (skinUrl == null || skinUrl.isBlank()) {
+            return skinLocation != null ? skinLocation : insecureSkin;
+        }
+
+        String normalizedUrl = skinUrl.regionMatches(true, 0, "http://", 0, 7)
+                ? "https://" + skinUrl.substring(7)
+                : skinUrl;
+
+        return CUSTOM_SKIN_TEXTURES.computeIfAbsent(normalizedUrl, url -> {
+            String safeKey = sanitizeTextureKey(url);
+            ResourceLocation customLoc = ResourceLocation.fromNamespaceAndPath("chat_heads_custom", "skins/" + safeKey);
+            ResourceLocation fallback = DefaultPlayerSkin.get(profile).texture();
+            File cacheDir = new File(Minecraft.getInstance().gameDirectory, "cache/chat_heads_skins");
+            cacheDir.mkdirs();
+            File cacheFile = new File(cacheDir, safeKey + ".png");
+            HttpTexture httpTexture = new HttpTexture(cacheFile, url, fallback, true, null);
+            ((TextureLocationSettable) httpTexture).chatheads$setTextureLocation(customLoc);
+            Minecraft.getInstance().getTextureManager().register(customLoc, httpTexture);
+            return customLoc;
+        });
+    }
+
+    public static void renderChatHead(GuiGraphics guiGraphics, int x, int y, PlayerInfo owner, float opacity, boolean drawShadow) {
+        ClientPacketListener connection = Minecraft.getInstance().getConnection();
+        if (connection != null && owner.getProfile() != null) {
+            PlayerInfo latest = owner.getProfile().getId() != null ? connection.getPlayerInfo(owner.getProfile().getId()) : null;
+            if (latest == null && owner.getProfile().getName() != null) {
+                latest = connection.getPlayerInfo(owner.getProfile().getName());
+            }
+            if (latest != null) {
+                owner = latest;
+            }
+        }
+        UUID uuid = owner.getProfile() != null ? owner.getProfile().getId() : null;
+        ClientLevel level = Minecraft.getInstance().level;
+        Player player = level != null && uuid != null ? level.getPlayerByUUID(uuid) : null;
+        ResourceLocation skinLocation = resolveSkinLocation(owner, player);
+
+        if (opacity != 1.0f)
+            RenderSystem.enableBlend();
+
+        int shadowOffset = drawShadow ? -1 : 0;
+
+        boolean upsideDown = player != null && LivingEntityRenderer.isEntityUpsideDown(player);
+
+        boolean isLocalPlayer = uuid != null && uuid.equals(Minecraft.getInstance().getGameProfile().getId());
+        boolean showHat = player != null && player.isModelPartShown(PlayerModelPart.HAT) || player == null && isLocalPlayer && Minecraft.getInstance().options.isModelPartEnabled(PlayerModelPart.HAT);
+
+        int yOffset = (upsideDown ? 8 : 0);
+        int yDirection = (upsideDown ? -1 : 1);
+
+        boolean threeDee = ChatHeads.CONFIG.threeDeeNess() != 0;
+
+        if (showHat && !threeDee && blendedHeadTextures.contains(skinLocation)) {
+            if (drawShadow) {
+                RenderSystem.setShaderColor(0.25f, 0.25f, 0.25f, opacity);
+                guiGraphics.blit(getBlendedHeadLocation(skinLocation), x + 1, y, 8, 8, 0, yOffset, 8, yDirection * 8, 8, 8);
+            }
+
+            RenderSystem.setShaderColor(1.0f, 1.0f, 1.0f, opacity);
+
+            // draw head in one draw call, fixing transparency issues of the "vanilla" path below
+            guiGraphics.blit(getBlendedHeadLocation(skinLocation), x, y + shadowOffset, 8, 8, 0, yOffset, 8, yDirection * 8, 8, 8);
+        } else {
+            var pose = guiGraphics.pose();
+            BiConsumer<Integer, Integer> pushAndScale = (x0, y0) -> {
+                // scale 8² to max of 10² pixels from the head's center
+                float scale = 1f + (ChatHeads.CONFIG.threeDeeNess() * 0.25f);
+                pose.pushPose();
+                pose.translate( (x0 + 4f),  (y0 + 4f), 0);
+                pose.scale(scale, scale, 1);
+                pose.translate(-(x0 + 4f), -(y0 + 4f), 0);
+            };
+
+            if (drawShadow) {
+                RenderSystem.setShaderColor(0.25f, 0.25f, 0.25f, opacity);
+
+                guiGraphics.blit(skinLocation, x + 1, y,  8, 8, 8, 8 + yOffset, 8, yDirection * 8, 64, 64);
+                if (showHat) {
+                    if (threeDee) pushAndScale.accept(x + 1, y);
+                    guiGraphics.blit(skinLocation, x + 1, y, 8, 8, 40.0f, 8 + yOffset, 8, yDirection * 8, 64, 64);
+                    if (threeDee) pose.popPose();
+                }
+            }
+
+            RenderSystem.setShaderColor(1.0f, 1.0f, 1.0f, opacity);
+
+            guiGraphics.blit(skinLocation, x, y + shadowOffset, 8, 8, 8.0f, 8 + yOffset, 8, yDirection * 8, 64, 64);
+            if (showHat) {
+                if (threeDee) pushAndScale.accept(x, y + shadowOffset);
+                guiGraphics.blit(skinLocation, x, y + shadowOffset, 8, 8, 40.0f, 8 + yOffset, 8, yDirection * 8, 64, 64);
+                if (threeDee) pose.popPose();
+            }
+        }
+
+        if (opacity != 1.0f) {
+            RenderSystem.setShaderColor(1.0f, 1.0f, 1.0f, 1.0f);
+            RenderSystem.disableBlend();
+        }
+    }
+}

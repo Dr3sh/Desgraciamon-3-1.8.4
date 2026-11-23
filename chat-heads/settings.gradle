@@ -1,0 +1,23 @@
+pluginManagement {
+    repositories {
+        maven { url = "https://maven.fabricmc.net/" }
+        maven { url = "https://maven.architectury.dev/" }
+        maven { url = "https://maven.minecraftforge.net/" }
+        gradlePluginPortal()
+        exclusiveContent {
+            forRepository {
+                maven {
+                    url = 'https://maven.maxhenkel.de/repository/public'
+                }
+            }
+            filter {
+                includeGroupAndSubgroups 'de.maxhenkel'
+            }
+        }
+    }
+}
+
+include("common")
+include(enabled_platforms.split(','))
+
+rootProject.name = archives_base_name

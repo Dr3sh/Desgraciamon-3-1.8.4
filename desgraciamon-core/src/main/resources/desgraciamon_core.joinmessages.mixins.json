@@ -1,0 +1,15 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.desgraciamon.joinmessages.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "ChatTypeDecorationMixin",
+    "PlayerListMixin",
+    "ServerGamePacketListenerMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
+

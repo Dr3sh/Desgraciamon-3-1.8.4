@@ -1,0 +1,19 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.desgraciamon.itemrestrictions.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "ServerPlayerGameModeMixin",
+    "PlayerMixin",
+    "RecipeManagerMixin",
+    "LootTableMixin"
+  ],
+  "client": [
+    "GuiGraphicsMixin",
+    "MultiPlayerGameModeMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

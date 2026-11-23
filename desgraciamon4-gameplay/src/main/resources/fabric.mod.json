@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "id": "desgraciamon4_gameplay",
+  "version": "${version}",
+  "name": "Desgraciamon Gameplay",
+  "description": "Suite unificada de Cobblemon: Bestiario Legendario, Cooldowns, Radar de Biomas y Asistente de Captura.",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "com.addoncobblemon.legendarybestiary.LegendaryBestiaryMod",
+      "com.addoncobblemon.legendarycooldown.LegendaryCooldownMod",
+      "com.desgraciamon.biomelocator.BiomeLocatorMod",
+      "com.desgraciamon.catchassistant.DesgraciamonCatchAssistantMod"
+    ],
+    "client": [
+      "com.addoncobblemon.legendarybestiary.LegendaryBestiaryClient",
+      "com.desgraciamon.biomelocator.BiomeLocatorClient",
+      "com.desgraciamon.catchassistant.DesgraciamonCatchAssistantClient"
+    ]
+  },
+  "mixins": [
+    "legendary_cooldown.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=0.16.0",
+    "fabric-api": "*",
+    "fabric-language-kotlin": ">=1.13.6",
+    "minecraft": "~1.21.1",
+    "java": ">=21",
+    "cobblemon": "~1.8.4"
+  },
+  "provides": [
+    "legendary_bestiary",
+    "legendary_cooldown",
+    "desgraciamon4-biome-locator",
+    "desgraciamon_catch_assistant"
+  ]
+}
+
