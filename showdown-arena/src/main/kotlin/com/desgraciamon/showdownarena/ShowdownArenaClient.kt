@@ -45,9 +45,11 @@ class ShowdownArenaClient : ClientModInitializer {
         ArenaMusicClient.init()
         SkyLogoClient.init()
         GtsZoneClient.init()
+        ShowdownBattlePartyClient.init()
 
         ClientTickEvents.END_CLIENT_TICK.register { client ->
             ArenaMusicClient.tick(client)
+            ShowdownBattlePartyClient.tick(client)
         }
 
         // Limpiar estado en el cliente al desconectarse de cualquier mundo/servidor
@@ -59,6 +61,7 @@ class ShowdownArenaClient : ClientModInitializer {
             SkyLogoClient.reset()
             GtsZoneClient.currentZone = null
             GtsZoneClient.isEnabled = false
+            ShowdownBattlePartyClient.reset()
         }
 
         // 2. Renderizado de campos de fuerza y mallas holográficas en el mundo (AFTER_TRANSLUCENT para respetar depth de bloques y modelos)
@@ -84,10 +87,10 @@ class ShowdownArenaClient : ClientModInitializer {
             val target = Minecraft.getInstance().level?.getPlayerByUUID(packet.targetId) ?: return@register
 
             // Botón nativo visible y estilizado para abrir el modo Showdown
-            val button = Button.builder(Component.literal("MODO SHOWDOWN")) {
+            val button = Button.builder(Component.literal("Otro tipo de combate")) {
                 Minecraft.getInstance().setScreen(ShowdownBattleScreen(screen, target.gameProfile.name))
             }
-                .bounds(screen.width / 2 - 65, screen.height / 2 + 58, 130, 20)
+                .bounds(screen.width / 2 - 70, minOf(screen.height - 26, screen.height / 2 + 95), 140, 20)
                 .tooltip(Tooltip.create(Component.literal("Configurar combate con formatos y generaciones de Pokémon Showdown")))
                 .build()
 

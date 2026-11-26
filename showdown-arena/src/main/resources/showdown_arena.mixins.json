@@ -12,7 +12,9 @@
   ],
   "client": [
     "BattleConfigureGUIAccessor",
-    "ArenaDarkSkyMixin"
+    "ArenaDarkSkyMixin",
+    "LocalBattlePartyTrackerMixin",
+    "PartyOverlayMixin"
   ],
   "injectors": {
     "defaultRequire": 1

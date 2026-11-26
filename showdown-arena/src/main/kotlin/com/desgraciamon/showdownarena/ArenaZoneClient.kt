@@ -4,7 +4,9 @@ import com.mojang.blaze3d.platform.GlStateManager
 import com.mojang.blaze3d.systems.RenderSystem
 import com.mojang.blaze3d.vertex.BufferBuilder
 import com.mojang.blaze3d.vertex.BufferUploader
+import com.mojang.blaze3d.vertex.ByteBufferBuilder
 import com.mojang.blaze3d.vertex.DefaultVertexFormat
+import com.mojang.blaze3d.vertex.VertexConsumer
 import com.mojang.blaze3d.vertex.VertexFormat
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking
 import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderContext
@@ -12,7 +14,11 @@ import net.fabricmc.loader.api.FabricLoader
 import net.minecraft.client.Minecraft
 import net.minecraft.client.gui.GuiGraphics
 import net.minecraft.client.renderer.GameRenderer
+import net.minecraft.client.renderer.LightTexture
+import net.minecraft.client.renderer.MultiBufferSource
+import net.minecraft.client.renderer.RenderType
 import net.minecraft.client.renderer.ShaderInstance
+import net.minecraft.client.renderer.texture.OverlayTexture
 import net.minecraft.client.resources.sounds.SimpleSoundInstance
 import net.minecraft.core.BlockPos
 import net.minecraft.core.Direction
@@ -87,26 +93,75 @@ object ArenaZoneClient {
             ResourceLocation.fromNamespaceAndPath("showdown_arena", "shaders/post/arena_bloom.json")
         )
     }
+    internal val WHITE_TEX: ResourceLocation =
+        ResourceLocation.fromNamespaceAndPath("showdown_arena", "textures/misc/white.png")
+
+    internal fun irisTranslucentType(): RenderType = RenderType.text(WHITE_TEX)
+    internal fun irisAdditiveType(): RenderType = RenderType.lightning()
+
+    private var lastPhotonCheckMs = 0L
+    private var cachedPhotonActive = false
+    private var irisPackNameChecked = false
+    private var irisPackNameMethod: java.lang.reflect.Method? = null
+
+    internal fun isPhotonShaderActive(): Boolean {
+        val now = System.currentTimeMillis()
+        if (now - lastPhotonCheckMs < 1000L) return cachedPhotonActive
+        lastPhotonCheckMs = now
+        if (!isIrisShaderPackActive()) {
+            cachedPhotonActive = false
+            return false
+        }
+        if (!irisPackNameChecked) {
+            irisPackNameChecked = true
+            irisPackNameMethod = runCatching {
+                Class.forName("net.irisshaders.iris.Iris").getMethod("getCurrentPackName")
+            }.getOrNull()
+        }
+        val name = runCatching {
+            (irisPackNameMethod?.invoke(null) as? String).orEmpty()
+        }.getOrDefault("")
+        cachedPhotonActive = name.contains("photon", ignoreCase = true)
+        return cachedPhotonActive
+    }
+
     private var irisApiChecked = false
     private var irisApiInstance: Any? = null
     private var irisIsInUseMethod: java.lang.reflect.Method? = null
+    private var irisIsShadowPassMethod: java.lang.reflect.Method? = null
 
-    private fun isIrisShaderPackActive(): Boolean {
-        if (!irisApiChecked) {
-            irisApiChecked = true
-            if (FabricLoader.getInstance().isModLoaded("iris")) {
-                try {
-                    val cls = Class.forName("net.irisshaders.iris.api.v0.IrisApi")
-                    irisApiInstance = cls.getMethod("getInstance").invoke(null)
-                    irisIsInUseMethod = cls.getMethod("isShaderPackInUse")
-                } catch (_: Throwable) {
-                    irisApiInstance = null
-                    irisIsInUseMethod = null
-                }
+    private fun ensureIrisApi() {
+        if (irisApiChecked) return
+        irisApiChecked = true
+        if (FabricLoader.getInstance().isModLoaded("iris")) {
+            try {
+                val cls = Class.forName("net.irisshaders.iris.api.v0.IrisApi")
+                irisApiInstance = cls.getMethod("getInstance").invoke(null)
+                irisIsInUseMethod = cls.getMethod("isShaderPackInUse")
+                irisIsShadowPassMethod = cls.getMethod("isRenderingShadowPass")
+            } catch (_: Throwable) {
+                irisApiInstance = null
+                irisIsInUseMethod = null
+                irisIsShadowPassMethod = null
             }
         }
+    }
+
+    internal fun isIrisShaderPackActive(): Boolean {
+        ensureIrisApi()
         val inst = irisApiInstance ?: return false
         val method = irisIsInUseMethod ?: return false
+        return try {
+            (method.invoke(inst) as? Boolean) == true
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    internal fun isIrisRenderingShadowPass(): Boolean {
+        ensureIrisApi()
+        val inst = irisApiInstance ?: return false
+        val method = irisIsShadowPassMethod ?: return false
         return try {
             (method.invoke(inst) as? Boolean) == true
         } catch (_: Throwable) {
@@ -387,39 +442,289 @@ object ArenaZoneClient {
         return lerp(dayB, nightB, currentNightFactor)
     }
 
+    private var activeUseIris = false
+    private var activeUsePhoton = false
+    private var activeIrisAlpha = 1.0f
+
+    internal fun emitIrisTranslucentQuad(
+        buf: VertexConsumer,
+        m: Matrix4f,
+        x0: Float, y0: Float, z0: Float, r0: Float, g0: Float, b0: Float, a0: Float,
+        x1: Float, y1: Float, z1: Float, r1: Float, g1: Float, b1: Float, a1: Float,
+        x2: Float, y2: Float, z2: Float, r2: Float, g2: Float, b2: Float, a2: Float,
+        x3: Float, y3: Float, z3: Float, r3: Float, g3: Float, b3: Float, a3: Float,
+        alphaScale: Float
+    ) {
+        val ca0 = (a0 * alphaScale).coerceIn(0.12f, 0.96f)
+        val ca1 = (a1 * alphaScale).coerceIn(0.12f, 0.96f)
+        val ca2 = (a2 * alphaScale).coerceIn(0.12f, 0.96f)
+        val ca3 = (a3 * alphaScale).coerceIn(0.12f, 0.96f)
+        val cScale = 0.92f
+
+        val cr0 = (r0 * cScale).coerceIn(0f, 1f); val cg0 = (g0 * cScale).coerceIn(0f, 1f); val cb0 = (b0 * cScale).coerceIn(0f, 1f)
+        val cr1 = (r1 * cScale).coerceIn(0f, 1f); val cg1 = (g1 * cScale).coerceIn(0f, 1f); val cb1 = (b1 * cScale).coerceIn(0f, 1f)
+        val cr2 = (r2 * cScale).coerceIn(0f, 1f); val cg2 = (g2 * cScale).coerceIn(0f, 1f); val cb2 = (b2 * cScale).coerceIn(0f, 1f)
+        val cr3 = (r3 * cScale).coerceIn(0f, 1f); val cg3 = (g3 * cScale).coerceIn(0f, 1f); val cb3 = (b3 * cScale).coerceIn(0f, 1f)
+
+        // RenderType.text usa POSITION_COLOR_TEX_LIGHTMAP con cull; emitir doble cara
+        buf.addVertex(m, x0, y0, z0).setColor(cr0, cg0, cb0, ca0).setUv(0.5f, 0.5f).setLight(LightTexture.FULL_BRIGHT)
+        buf.addVertex(m, x1, y1, z1).setColor(cr1, cg1, cb1, ca1).setUv(0.5f, 0.5f).setLight(LightTexture.FULL_BRIGHT)
+        buf.addVertex(m, x2, y2, z2).setColor(cr2, cg2, cb2, ca2).setUv(0.5f, 0.5f).setLight(LightTexture.FULL_BRIGHT)
+        buf.addVertex(m, x3, y3, z3).setColor(cr3, cg3, cb3, ca3).setUv(0.5f, 0.5f).setLight(LightTexture.FULL_BRIGHT)
+
+        buf.addVertex(m, x3, y3, z3).setColor(cr3, cg3, cb3, ca3).setUv(0.5f, 0.5f).setLight(LightTexture.FULL_BRIGHT)
+        buf.addVertex(m, x2, y2, z2).setColor(cr2, cg2, cb2, ca2).setUv(0.5f, 0.5f).setLight(LightTexture.FULL_BRIGHT)
+        buf.addVertex(m, x1, y1, z1).setColor(cr1, cg1, cb1, ca1).setUv(0.5f, 0.5f).setLight(LightTexture.FULL_BRIGHT)
+        buf.addVertex(m, x0, y0, z0).setColor(cr0, cg0, cb0, ca0).setUv(0.5f, 0.5f).setLight(LightTexture.FULL_BRIGHT)
+    }
+
+    internal fun emitIrisAdditiveQuad(
+        buf: VertexConsumer,
+        m: Matrix4f,
+        x0: Float, y0: Float, z0: Float, r0: Float, g0: Float, b0: Float, a0: Float,
+        x1: Float, y1: Float, z1: Float, r1: Float, g1: Float, b1: Float, a1: Float,
+        x2: Float, y2: Float, z2: Float, r2: Float, g2: Float, b2: Float, a2: Float,
+        x3: Float, y3: Float, z3: Float, r3: Float, g3: Float, b3: Float, a3: Float,
+        alphaScale: Float
+    ) {
+        val raw0 = (a0 * alphaScale).coerceIn(0f, 1f)
+        val raw1 = (a1 * alphaScale).coerceIn(0f, 1f)
+        val raw2 = (a2 * alphaScale).coerceIn(0f, 1f)
+        val raw3 = (a3 * alphaScale).coerceIn(0f, 1f)
+        if (raw0 < 0.002f && raw1 < 0.002f && raw2 < 0.002f && raw3 < 0.002f) return
+
+        val cr0 = r0.coerceIn(0f, 1f); val cg0 = g0.coerceIn(0f, 1f); val cb0 = b0.coerceIn(0f, 1f)
+        val cr1 = r1.coerceIn(0f, 1f); val cg1 = g1.coerceIn(0f, 1f); val cb1 = b1.coerceIn(0f, 1f)
+        val cr2 = r2.coerceIn(0f, 1f); val cg2 = g2.coerceIn(0f, 1f); val cb2 = b2.coerceIn(0f, 1f)
+        val cr3 = r3.coerceIn(0f, 1f); val cg3 = g3.coerceIn(0f, 1f); val cb3 = b3.coerceIn(0f, 1f)
+
+        // RenderType.lightning() usa POSITION_COLOR con blending aditivo SRC_ALPHA,ONE sin aplastamiento pow1_5
+        buf.addVertex(m, x0, y0, z0).setColor(cr0, cg0, cb0, raw0)
+        buf.addVertex(m, x1, y1, z1).setColor(cr1, cg1, cb1, raw1)
+        buf.addVertex(m, x2, y2, z2).setColor(cr2, cg2, cb2, raw2)
+        buf.addVertex(m, x3, y3, z3).setColor(cr3, cg3, cb3, raw3)
+
+        buf.addVertex(m, x3, y3, z3).setColor(cr3, cg3, cb3, raw3)
+        buf.addVertex(m, x2, y2, z2).setColor(cr2, cg2, cb2, raw2)
+        buf.addVertex(m, x1, y1, z1).setColor(cr1, cg1, cb1, raw1)
+        buf.addVertex(m, x0, y0, z0).setColor(cr0, cg0, cb0, raw0)
+    }
+
+    internal fun emitPhotonTranslucentQuad(
+        buf: VertexConsumer,
+        m: Matrix4f,
+        x0: Float, y0: Float, z0: Float, r0: Float, g0: Float, b0: Float, a0: Float,
+        x1: Float, y1: Float, z1: Float, r1: Float, g1: Float, b1: Float, a1: Float,
+        x2: Float, y2: Float, z2: Float, r2: Float, g2: Float, b2: Float, a2: Float,
+        x3: Float, y3: Float, z3: Float, r3: Float, g3: Float, b3: Float, a3: Float,
+        alphaScale: Float
+    ) {
+        val a0s = (a0 * alphaScale).coerceIn(0f, 1f)
+        val a1s = (a1 * alphaScale).coerceIn(0f, 1f)
+        val a2s = (a2 * alphaScale).coerceIn(0f, 1f)
+        val a3s = (a3 * alphaScale).coerceIn(0f, 1f)
+        if (maxOf(a0s, a1s, a2s, a3s) < 0.003f) return
+
+        buf.addVertex(m, x0, y0, z0).setColor(r0.coerceIn(0f, 1f), g0.coerceIn(0f, 1f), b0.coerceIn(0f, 1f), a0s)
+        buf.addVertex(m, x1, y1, z1).setColor(r1.coerceIn(0f, 1f), g1.coerceIn(0f, 1f), b1.coerceIn(0f, 1f), a1s)
+        buf.addVertex(m, x2, y2, z2).setColor(r2.coerceIn(0f, 1f), g2.coerceIn(0f, 1f), b2.coerceIn(0f, 1f), a2s)
+        buf.addVertex(m, x3, y3, z3).setColor(r3.coerceIn(0f, 1f), g3.coerceIn(0f, 1f), b3.coerceIn(0f, 1f), a3s)
+    }
+
+    internal fun emitPhotonAdditiveQuad(
+        buf: VertexConsumer,
+        m: Matrix4f,
+        x0: Float, y0: Float, z0: Float, r0: Float, g0: Float, b0: Float, a0: Float,
+        x1: Float, y1: Float, z1: Float, r1: Float, g1: Float, b1: Float, a1: Float,
+        x2: Float, y2: Float, z2: Float, r2: Float, g2: Float, b2: Float, a2: Float,
+        x3: Float, y3: Float, z3: Float, r3: Float, g3: Float, b3: Float, a3: Float,
+        alphaScale: Float
+    ) {
+        val a0s = (a0 * alphaScale).coerceIn(0f, 1f)
+        val a1s = (a1 * alphaScale).coerceIn(0f, 1f)
+        val a2s = (a2 * alphaScale).coerceIn(0f, 1f)
+        val a3s = (a3 * alphaScale).coerceIn(0f, 1f)
+        if (maxOf(a0s, a1s, a2s, a3s) < 0.003f) return
+
+        buf.addVertex(m, x0, y0, z0).setColor(r0.coerceIn(0f, 1f), g0.coerceIn(0f, 1f), b0.coerceIn(0f, 1f), a0s)
+        buf.addVertex(m, x1, y1, z1).setColor(r1.coerceIn(0f, 1f), g1.coerceIn(0f, 1f), b1.coerceIn(0f, 1f), a1s)
+        buf.addVertex(m, x2, y2, z2).setColor(r2.coerceIn(0f, 1f), g2.coerceIn(0f, 1f), b2.coerceIn(0f, 1f), a2s)
+        buf.addVertex(m, x3, y3, z3).setColor(r3.coerceIn(0f, 1f), g3.coerceIn(0f, 1f), b3.coerceIn(0f, 1f), a3s)
+    }
+
+    internal fun emitPhotonNeonLine(
+        buf: VertexConsumer,
+        m: Matrix4f,
+        x0: Float, y0: Float, z0: Float, r0: Float, g0: Float, b0: Float, a0: Float,
+        x1: Float, y1: Float, z1: Float, r1: Float, g1: Float, b1: Float, a1: Float,
+        halfWidth: Float,
+        alphaScale: Float
+    ) {
+        val dx = x1 - x0; val dy = y1 - y0; val dz = z1 - z0
+        val mx = (x0 + x1) * 0.5f; val my = (y0 + y1) * 0.5f; val mz = (z0 + z1) * 0.5f
+        var sx = dy * (-mz) - dz * (-my)
+        var sy = dz * (-mx) - dx * (-mz)
+        var sz = dx * (-my) - dy * (-mx)
+        var sLen = sqrt(sx * sx + sy * sy + sz * sz)
+        if (sLen < 1e-5f) {
+            sx = -dz; sy = 0f; sz = dx
+            sLen = sqrt(sx * sx + sz * sz)
+            if (sLen < 1e-5f) { sx = 1f; sy = 0f; sz = 0f; sLen = 1f }
+        }
+        val scale = halfWidth / sLen
+        sx *= scale; sy *= scale; sz *= scale
+
+        emitPhotonAdditiveQuad(
+            buf, m,
+            x0 - sx, y0 - sy, z0 - sz, r0, g0, b0, a0,
+            x0 + sx, y0 + sy, z0 + sz, r0, g0, b0, a0,
+            x1 + sx, y1 + sy, z1 + sz, r1, g1, b1, a1,
+            x1 - sx, y1 - sy, z1 - sz, r1, g1, b1, a1,
+            alphaScale
+        )
+    }
+
+    internal fun emitIrisNeonLine(
+        buf: VertexConsumer,
+        m: Matrix4f,
+        x0: Float, y0: Float, z0: Float, r0: Float, g0: Float, b0: Float, a0: Float,
+        x1: Float, y1: Float, z1: Float, r1: Float, g1: Float, b1: Float, a1: Float,
+        halfWidth: Float,
+        alphaScale: Float
+    ) {
+        val dx = x1 - x0; val dy = y1 - y0; val dz = z1 - z0
+        val mx = (x0 + x1) * 0.5f; val my = (y0 + y1) * 0.5f; val mz = (z0 + z1) * 0.5f
+        // cross(dir, -midpoint) gives camera-facing perpendicular ribbon vector
+        var sx = dy * (-mz) - dz * (-my)
+        var sy = dz * (-mx) - dx * (-mz)
+        var sz = dx * (-my) - dy * (-mx)
+        var sLen = sqrt(sx * sx + sy * sy + sz * sz)
+        if (sLen < 1e-5f) {
+            sx = -dz; sy = 0f; sz = dx
+            sLen = sqrt(sx * sx + sz * sz)
+            if (sLen < 1e-5f) { sx = 1f; sy = 0f; sz = 0f; sLen = 1f }
+        }
+        val scale = halfWidth / sLen
+        sx *= scale; sy *= scale; sz *= scale
+
+        emitIrisAdditiveQuad(
+            buf, m,
+            x0 - sx, y0 - sy, z0 - sz, r0, g0, b0, a0,
+            x0 + sx, y0 + sy, z0 + sz, r0, g0, b0, a0,
+            x1 + sx, y1 + sy, z1 + sz, r1, g1, b1, a1,
+            x1 - sx, y1 - sy, z1 - sz, r1, g1, b1, a1,
+            alphaScale
+        )
+    }
+
     private fun emitQuad(
-        buf: BufferBuilder,
+        buf: VertexConsumer,
         m: Matrix4f,
         x0: Float, y0: Float, z0: Float, r0: Float, g0: Float, b0: Float, a0: Float,
         x1: Float, y1: Float, z1: Float, r1: Float, g1: Float, b1: Float, a1: Float,
         x2: Float, y2: Float, z2: Float, r2: Float, g2: Float, b2: Float, a2: Float,
         x3: Float, y3: Float, z3: Float, r3: Float, g3: Float, b3: Float, a3: Float
     ) {
-        buf.addVertex(m, x0, y0, z0).setColor(r0, g0, b0, a0)
-        buf.addVertex(m, x1, y1, z1).setColor(r1, g1, b1, a1)
-        buf.addVertex(m, x2, y2, z2).setColor(r2, g2, b2, a2)
-        buf.addVertex(m, x3, y3, z3).setColor(r3, g3, b3, a3)
+        if (activeUsePhoton) {
+            emitPhotonTranslucentQuad(
+                buf, m,
+                x0, y0, z0, r0, g0, b0, a0,
+                x1, y1, z1, r1, g1, b1, a1,
+                x2, y2, z2, r2, g2, b2, a2,
+                x3, y3, z3, r3, g3, b3, a3,
+                activeIrisAlpha
+            )
+            return
+        }
+        if (activeUseIris) {
+            emitIrisTranslucentQuad(
+                buf, m,
+                x0, y0, z0, r0, g0, b0, a0,
+                x1, y1, z1, r1, g1, b1, a1,
+                x2, y2, z2, r2, g2, b2, a2,
+                x3, y3, z3, r3, g3, b3, a3,
+                activeIrisAlpha
+            )
+            return
+        }
+        buf.addVertex(m, x0, y0, z0).setColor(r0, g0, b0, a0.coerceIn(0f, 1f))
+        buf.addVertex(m, x1, y1, z1).setColor(r1, g1, b1, a1.coerceIn(0f, 1f))
+        buf.addVertex(m, x2, y2, z2).setColor(r2, g2, b2, a2.coerceIn(0f, 1f))
+        buf.addVertex(m, x3, y3, z3).setColor(r3, g3, b3, a3.coerceIn(0f, 1f))
+    }
+
+    private fun emitGlowQuad(
+        buf: VertexConsumer,
+        m: Matrix4f,
+        x0: Float, y0: Float, z0: Float, r0: Float, g0: Float, b0: Float, a0: Float,
+        x1: Float, y1: Float, z1: Float, r1: Float, g1: Float, b1: Float, a1: Float,
+        x2: Float, y2: Float, z2: Float, r2: Float, g2: Float, b2: Float, a2: Float,
+        x3: Float, y3: Float, z3: Float, r3: Float, g3: Float, b3: Float, a3: Float
+    ) {
+        if (activeUsePhoton) {
+            emitPhotonAdditiveQuad(
+                buf, m,
+                x0, y0, z0, r0, g0, b0, a0,
+                x1, y1, z1, r1, g1, b1, a1,
+                x2, y2, z2, r2, g2, b2, a2,
+                x3, y3, z3, r3, g3, b3, a3,
+                activeIrisAlpha
+            )
+            return
+        }
+        if (activeUseIris) {
+            emitIrisAdditiveQuad(
+                buf, m,
+                x0, y0, z0, r0, g0, b0, a0,
+                x1, y1, z1, r1, g1, b1, a1,
+                x2, y2, z2, r2, g2, b2, a2,
+                x3, y3, z3, r3, g3, b3, a3,
+                activeIrisAlpha
+            )
+            return
+        }
+        buf.addVertex(m, x0, y0, z0).setColor(r0, g0, b0, a0.coerceIn(0f, 1f))
+        buf.addVertex(m, x1, y1, z1).setColor(r1, g1, b1, a1.coerceIn(0f, 1f))
+        buf.addVertex(m, x2, y2, z2).setColor(r2, g2, b2, a2.coerceIn(0f, 1f))
+        buf.addVertex(m, x3, y3, z3).setColor(r3, g3, b3, a3.coerceIn(0f, 1f))
     }
 
     private fun emitLine(
-        buf: BufferBuilder,
+        buf: VertexConsumer,
         m: Matrix4f,
         x0: Float, y0: Float, z0: Float,
         x1: Float, y1: Float, z1: Float,
         r: Float, g: Float, b: Float, a: Float
     ) {
-        buf.addVertex(m, x0, y0, z0).setColor(r, g, b, a)
-        buf.addVertex(m, x1, y1, z1).setColor(r, g, b, a)
+        if (activeUsePhoton) {
+            emitPhotonNeonLine(buf, m, x0, y0, z0, r, g, b, a, x1, y1, z1, r, g, b, a, 0.032f, activeIrisAlpha)
+            return
+        }
+        if (activeUseIris) {
+            emitIrisNeonLine(buf, m, x0, y0, z0, r, g, b, a, x1, y1, z1, r, g, b, a, 0.032f, activeIrisAlpha)
+            return
+        }
+        val ca = a.coerceIn(0f, 1f)
+        buf.addVertex(m, x0, y0, z0).setColor(r, g, b, ca)
+        buf.addVertex(m, x1, y1, z1).setColor(r, g, b, ca)
     }
 
     private fun emitLineGrad(
-        buf: BufferBuilder,
+        buf: VertexConsumer,
         m: Matrix4f,
         x0: Float, y0: Float, z0: Float, r0: Float, g0: Float, b0: Float, a0: Float,
         x1: Float, y1: Float, z1: Float, r1: Float, g1: Float, b1: Float, a1: Float
     ) {
-        buf.addVertex(m, x0, y0, z0).setColor(r0, g0, b0, a0)
-        buf.addVertex(m, x1, y1, z1).setColor(r1, g1, b1, a1)
+        if (activeUsePhoton) {
+            emitPhotonNeonLine(buf, m, x0, y0, z0, r0, g0, b0, a0, x1, y1, z1, r1, g1, b1, a1, 0.032f, activeIrisAlpha)
+            return
+        }
+        if (activeUseIris) {
+            emitIrisNeonLine(buf, m, x0, y0, z0, r0, g0, b0, a0, x1, y1, z1, r1, g1, b1, a1, 0.032f, activeIrisAlpha)
+            return
+        }
+        buf.addVertex(m, x0, y0, z0).setColor(r0, g0, b0, a0.coerceIn(0f, 1f))
+        buf.addVertex(m, x1, y1, z1).setColor(r1, g1, b1, a1.coerceIn(0f, 1f))
     }
 
     /**
@@ -429,6 +734,7 @@ object ArenaZoneClient {
     fun render(context: WorldRenderContext) {
         val zone = currentZone ?: return
         if (!isEnabled) return
+        if (isIrisRenderingShadowPass()) return
 
         val mc = Minecraft.getInstance()
         val player = mc.player ?: return
@@ -441,7 +747,7 @@ object ArenaZoneClient {
         val darkDt = if (lastDarkRoomUpdateMs == 0L) 0.016f else ((nowDarkMs - lastDarkRoomUpdateMs).coerceIn(1L, 250L) / 1000.0f)
         lastDarkRoomUpdateMs = nowDarkMs
         val targetDark = if (isPlayerInside) 1.0f else 0.0f
-        val darkStep = (darkDt / 0.55f).coerceIn(0f, 1f)
+        val darkStep = (darkDt / 0.25f).coerceIn(0f, 1f)
         val darkDiff = targetDark - insideDarkRoomFactor
         insideDarkRoomFactor = if (abs(darkDiff) <= darkStep) targetDark else insideDarkRoomFactor + kotlin.math.sign(darkDiff) * darkStep
         val effectiveDarkness = maxOf(nightFactor, insideDarkRoomFactor)
@@ -467,10 +773,17 @@ object ArenaZoneClient {
         val cx = (centerWorldX - camPos.x).toFloat()
         val cz = (centerWorldZ - camPos.z).toFloat()
 
+        val irisActive = isIrisShaderPackActive()
+        val isPhoton = irisActive && isPhotonShaderActive()
+        val consumers = if (irisActive && !isPhoton) context.consumers() else null
+        val useIrisNonPhoton = irisActive && !isPhoton && consumers != null
+        val usePhotonPipeline = isPhoton
+        val useIrisPipeline = useIrisNonPhoton || usePhotonPipeline
+
         val maxRadius = maxOf(halfW, halfD)
         val renderDistBlocks = mc.options.renderDistance().get() * 16.0f
         val fogEnd = RenderSystem.getShaderFogEnd()
-        val effectiveLimit = if (fogEnd > 16.0f) minOf(renderDistBlocks, fogEnd) else renderDistBlocks
+        val effectiveLimit = if (useIrisPipeline) renderDistBlocks else if (fogEnd > 16.0f) minOf(renderDistBlocks, fogEnd) else renderDistBlocks
         val distToEdge = (sqrt(cx * cx + cz * cz) - maxRadius).coerceAtLeast(0.0f)
         if (distToEdge > effectiveLimit * 0.88f) return
         bloomNearArena = distToEdge <= 96.0f
@@ -481,6 +794,9 @@ object ArenaZoneClient {
             (1.0f - (distToEdge - fogFadeStart) / (effectiveLimit * 0.30f).coerceAtLeast(1.0f)).coerceIn(0.0f, 1.0f)
         }
         if (fogAlpha <= 0.01f) return
+        activeUseIris = useIrisNonPhoton
+        activeUsePhoton = usePhotonPipeline
+        activeIrisAlpha = if (useIrisPipeline) fogAlpha else 1.0f
 
         val rx = (halfW - 0.15f).coerceAtLeast(0.6f)
         val rz = (halfD - 0.15f).coerceAtLeast(0.6f)
@@ -545,75 +861,222 @@ object ArenaZoneClient {
         RenderSystem.depthFunc(org.lwjgl.opengl.GL11.GL_LEQUAL)
         RenderSystem.disableCull()
         RenderSystem.depthMask(false)
+        RenderSystem.enablePolygonOffset()
+        RenderSystem.polygonOffset(-1.0f, -2.0f)
         RenderSystem.setShaderColor(1.0f, 1.0f, 1.0f, fogAlpha)
         RenderSystem.setShader(GameRenderer::getPositionColorShader)
 
         val tessellator = RenderSystem.renderThreadTesselator()
         val matrix = matrices.last().pose()
+        val normalMatrix = matrices.last().normal()
+        val normalTmp = org.joml.Vector3f()
         val twoPi = (2.0 * PI).toFloat()
 
-        // PASS 0: Dark Studio Room ONLY inside the dome (black sky + black outside curtain + black arena floor)
-        if (insideDarkRoomFactor > 0.01f) {
-            val darkBuf = tessellator.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR)
-            val da = insideDarkRoomFactor.coerceIn(0f, 1f)
+        // Helper para envolvente cerrada negra fija al mundo justo en el borde del domo (sin arrastrarse con el jugador)
+        val shellRx = rx + 0.35f
+        val shellRz = rz + 0.35f
+        val shellBaseY = minOf(centerY, avgRingY)
+        val shellBotY = shellBaseY - 22.0f
+        val shellTopY = domeApexY + 1.25f
 
-            // 1) Black sky hemisphere around camera (scales with arena radius, behind everything inside the dome)
-            val skyR = maxOf(180.0f, maxRadius * 2.8f)
-            val skyStacks = 8
-            val skySlices = 24
-            for (st in 0 until skyStacks) {
-                val p0 = -0.35f + (st.toFloat() / skyStacks) * (PI.toFloat() * 0.5f + 0.35f)
-                val p1 = -0.35f + ((st + 1).toFloat() / skyStacks) * (PI.toFloat() * 0.5f + 0.35f)
-                val y0 = sin(p0) * skyR; val r0 = cos(p0) * skyR
-                val y1 = sin(p1) * skyR; val r1 = cos(p1) * skyR
-                for (sl in 0 until skySlices) {
-                    val a0 = (sl.toFloat() / skySlices) * twoPi
-                    val a1 = ((sl + 1).toFloat() / skySlices) * twoPi
+        val floorRings = 4
+        val floorSlices = 40
+        val floorRingY = Array(floorRings + 1) { FloatArray(floorSlices) }
+        for (fr in 0..floorRings) {
+            val frac = fr.toFloat() / floorRings
+            for (sl in 0 until floorSlices) {
+                val ang = (sl.toFloat() / floorSlices) * twoPi
+                if (fr == 0) {
+                    floorRingY[fr][sl] = centerY + 0.015f
+                } else {
+                    val wx = centerWorldX + cos(ang) * shellRx * frac
+                    val wz = centerWorldZ + sin(ang) * shellRz * frac
+                    val gy = (getGroundY(level, wx, wz, zone.minY, player.y) - camPos.y).toFloat()
+                    floorRingY[fr][sl] = gy.coerceIn(centerY - 2.2f, centerY + 2.2f) + 0.015f
+                }
+            }
+        }
+
+        fun emitBlackShell(
+            emit: (Float, Float, Float, Float, Float, Float, Float, Float, Float, Float, Float, Float) -> Unit
+        ) {
+            val shellSlices = floorSlices
+            val skirtBaseY = shellBaseY + 0.02f
+            val domeSpanY = (shellTopY - skirtBaseY).coerceAtLeast(1.0f)
+            val bottomInnerR = 0.02f
+
+            // 1) Tapa inferior bajo el suelo del domo y suelo negro interior pegado al terreno (debajo de los hologramas +0.045/+0.075)
+            for (sl in 0 until shellSlices) {
+                val a0 = (sl.toFloat() / shellSlices) * twoPi
+                val a1 = ((sl + 1).toFloat() / shellSlices) * twoPi
+                val c0 = cos(a0); val s0 = sin(a0); val c1 = cos(a1); val s1 = sin(a1)
+                emit(
+                    cx + c0 * bottomInnerR, shellBotY, cz + s0 * bottomInnerR,
+                    cx + c1 * bottomInnerR, shellBotY, cz + s1 * bottomInnerR,
+                    cx + c1 * shellRx, shellBotY, cz + s1 * shellRz,
+                    cx + c0 * shellRx, shellBotY, cz + s0 * shellRz
+                )
+            }
+            for (fr in 0 until floorRings) {
+                val f0 = fr.toFloat() / floorRings
+                val f1 = (fr + 1).toFloat() / floorRings
+                val rx0 = shellRx * f0; val rz0 = shellRz * f0
+                val rx1 = shellRx * f1; val rz1 = shellRz * f1
+                for (sl in 0 until shellSlices) {
+                    val nextSl = (sl + 1) % shellSlices
+                    val a0 = (sl.toFloat() / shellSlices) * twoPi
+                    val a1 = ((sl + 1).toFloat() / shellSlices) * twoPi
                     val c0 = cos(a0); val s0 = sin(a0); val c1 = cos(a1); val s1 = sin(a1)
-                    emitQuad(
-                        darkBuf, matrix,
-                        c0 * r0, y0, s0 * r0, 0f, 0f, 0f, da,
-                        c1 * r0, y0, s1 * r0, 0f, 0f, 0f, da,
-                        c1 * r1, y1, s1 * r1, 0f, 0f, 0f, da,
-                        c0 * r1, y1, s0 * r1, 0f, 0f, 0f, da
+                    emit(
+                        cx + c0 * rx0, floorRingY[fr][sl], cz + s0 * rz0,
+                        cx + c1 * rx0, floorRingY[fr][nextSl], cz + s1 * rz0,
+                        cx + c1 * rx1, floorRingY[fr + 1][nextSl], cz + s1 * rz1,
+                        cx + c0 * rx1, floorRingY[fr + 1][sl], cz + s0 * rz1
                     )
                 }
             }
 
-            // 2) Black outer perimeter curtain just outside the dome ring (hides everything outside the dome)
-            val wallRx = rx * 1.03f; val wallRz = rz * 1.03f
-            val wallBotY = centerY - maxOf(24.0f, domeHeight)
-            val wallTopY = domeApexY + maxOf(45.0f, domeHeight * 2.2f)
-            for (i in 0 until RING_SEGMENTS) {
-                val next = (i + 1) % RING_SEGMENTS
-                emitQuad(
-                    darkBuf, matrix,
-                    cx + ringCos[i] * wallRx, wallBotY, cz + ringSin[i] * wallRz, 0f, 0f, 0f, da,
-                    cx + ringCos[next] * wallRx, wallBotY, cz + ringSin[next] * wallRz, 0f, 0f, 0f, da,
-                    cx + ringCos[next] * wallRx, wallTopY, cz + ringSin[next] * wallRz, 0f, 0f, 0f, da,
-                    cx + ringCos[i] * wallRx, wallTopY, cz + ringSin[i] * wallRz, 0f, 0f, 0f, da
-                )
+            // 2) Falda cilindrica inferior desde el subsuelo hasta la base del domo
+            val skirtStacks = 2
+            for (st in 0 until skirtStacks) {
+                val y0 = lerp(shellBotY, skirtBaseY, st.toFloat() / skirtStacks)
+                val y1 = lerp(shellBotY, skirtBaseY, (st + 1).toFloat() / skirtStacks)
+                for (sl in 0 until shellSlices) {
+                    val a0 = (sl.toFloat() / shellSlices) * twoPi
+                    val a1 = ((sl + 1).toFloat() / shellSlices) * twoPi
+                    val c0 = cos(a0); val s0 = sin(a0); val c1 = cos(a1); val s1 = sin(a1)
+                    emit(
+                        cx + c0 * shellRx, y0, cz + s0 * shellRz,
+                        cx + c1 * shellRx, y0, cz + s1 * shellRz,
+                        cx + c1 * shellRx, y1, cz + s1 * shellRz,
+                        cx + c0 * shellRx, y1, cz + s0 * shellRz
+                    )
+                }
             }
 
-            // 3) Black arena floor disc underneath holographic lines (players/Pokemon above remain 100% visible)
-            val floorA = (da * 0.96f).coerceIn(0f, 0.98f)
+            // 3) Semiesfera superior pegada a la silueta del domo y cerrada en el cenit
+            val domeStacks = 12
+            val halfPi = (PI * 0.5).toFloat()
+            for (st in 0 until domeStacks) {
+                val p0 = (st.toFloat() / domeStacks) * halfPi
+                val p1 = ((st + 1).toFloat() / domeStacks) * halfPi
+                val cp0 = cos(p0).coerceAtLeast(0.01f)
+                val cp1 = cos(p1).coerceAtLeast(0.01f)
+                val y0 = skirtBaseY + sin(p0) * domeSpanY
+                val y1 = skirtBaseY + sin(p1) * domeSpanY
+                val rx0 = shellRx * cp0; val rz0 = shellRz * cp0
+                val rx1 = shellRx * cp1; val rz1 = shellRz * cp1
+                for (sl in 0 until shellSlices) {
+                    val a0 = (sl.toFloat() / shellSlices) * twoPi
+                    val a1 = ((sl + 1).toFloat() / shellSlices) * twoPi
+                    val c0 = cos(a0); val s0 = sin(a0); val c1 = cos(a1); val s1 = sin(a1)
+                    emit(
+                        cx + c0 * rx0, y0, cz + s0 * rz0,
+                        cx + c1 * rx0, y0, cz + s1 * rz0,
+                        cx + c1 * rx1, y1, cz + s1 * rz1,
+                        cx + c0 * rx1, y1, cz + s0 * rz1
+                    )
+                }
+            }
+        }
+
+        // PASS 0A: Exterior y suelo Negro Total desde dentro del domo (100% opaco en Vanilla, Complementary y Photon)
+        if (insideDarkRoomFactor > 0.01f) {
+            val da = insideDarkRoomFactor.coerceIn(0f, 1f)
+            val fullyOpaque = da >= 0.96f
+            RenderSystem.setShader(GameRenderer::getPositionColorShader)
+            if (fullyOpaque) {
+                RenderSystem.disableBlend()
+                RenderSystem.depthMask(true)
+            } else {
+                RenderSystem.enableBlend()
+                RenderSystem.defaultBlendFunc()
+                RenderSystem.depthMask(false)
+            }
+            val blackA = if (fullyOpaque) 1.0f else da
+            val blackBuf = tessellator.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR)
+            emitBlackShell { x0, y0, z0, x1, y1, z1, x2, y2, z2, x3, y3, z3 ->
+                blackBuf.addVertex(matrix, x0, y0, z0).setColor(0f, 0f, 0f, blackA)
+                blackBuf.addVertex(matrix, x1, y1, z1).setColor(0f, 0f, 0f, blackA)
+                blackBuf.addVertex(matrix, x2, y2, z2).setColor(0f, 0f, 0f, blackA)
+                blackBuf.addVertex(matrix, x3, y3, z3).setColor(0f, 0f, 0f, blackA)
+            }
+            blackBuf.build()?.let { BufferUploader.drawWithShader(it) }
+            if (fullyOpaque) {
+                RenderSystem.enableBlend()
+                RenderSystem.defaultBlendFunc()
+                RenderSystem.depthMask(false)
+            }
+        }
+
+        val photonTransAlloc: ByteBufferBuilder? = if (usePhotonPipeline) ByteBufferBuilder(262144) else null
+        val photonAddAlloc: ByteBufferBuilder? = if (usePhotonPipeline) ByteBufferBuilder(262144) else null
+        val photonTransBuf: BufferBuilder? = photonTransAlloc?.let { BufferBuilder(it, VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR) }
+        val photonAddBuf: BufferBuilder? = photonAddAlloc?.let { BufferBuilder(it, VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR) }
+        val irisTransBuffer: VertexConsumer = if (usePhotonPipeline) {
+            photonTransBuf!!
+        } else if (useIrisNonPhoton) {
+            consumers!!.getBuffer(irisTranslucentType())
+        } else {
+            tessellator.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR)
+        }
+        val irisAddBuffer: VertexConsumer = if (usePhotonPipeline) {
+            photonAddBuf!!
+        } else if (useIrisNonPhoton) {
+            consumers!!.getBuffer(irisAdditiveType())
+        } else {
+            irisTransBuffer
+        }
+
+        // PASS 0B: Neblina volumétrica interior sutil dentro del domo
+        if (insideDarkRoomFactor > 0.01f) {
+            val da = insideDarkRoomFactor.coerceIn(0f, 1f)
+            val darkBuf: VertexConsumer = if (useIrisPipeline) {
+                irisAddBuffer
+            } else {
+                tessellator.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR)
+            }
+            val lowMistRx = rx * 0.94f; val lowMistRz = rz * 0.94f
+            val lowMistTopY = centerY + domeHeight * 0.46f
+            val highMistRx = rx * 0.78f; val highMistRz = rz * 0.78f
+            val highMistBotY = centerY + domeHeight * 0.34f
+            val highMistTopY = centerY + domeHeight * 0.76f
             for (i in 0 until RING_SEGMENTS) {
                 val next = (i + 1) % RING_SEGMENTS
-                emitQuad(
+                val b0 = ringSideBlend[i]
+                val b1 = ringSideBlend[next]
+                val swirl0 = 0.5f + 0.5f * sin((i.toFloat() / RING_SEGMENTS) * twoPi * 2f + (baseTheta * 2.0).toFloat())
+                val swirl1 = 0.5f + 0.5f * sin((next.toFloat() / RING_SEGMENTS) * twoPi * 2f + (baseTheta * 2.0).toFloat())
+                val mA0 = da * (0.075f + 0.055f * swirl0 + 0.025f * pulse)
+                val mA1 = da * (0.075f + 0.055f * swirl1 + 0.025f * pulse)
+
+                val mr0 = stadiumR(b0); val mg0 = stadiumG(b0); val mb0 = stadiumB(b0)
+                val mr1 = stadiumR(b1); val mg1 = stadiumG(b1); val mb1 = stadiumB(b1)
+
+                emitGlowQuad(
                     darkBuf, matrix,
-                    cx, centerY + 0.012f, cz, 0f, 0f, 0f, floorA,
-                    cx + ringCos[i] * (rx * 1.02f), ringGroundY[i] + 0.012f, cz + ringSin[i] * (rz * 1.02f), 0f, 0f, 0f, floorA,
-                    cx + ringCos[next] * (rx * 1.02f), ringGroundY[next] + 0.012f, cz + ringSin[next] * (rz * 1.02f), 0f, 0f, 0f, floorA,
-                    cx, centerY + 0.012f, cz, 0f, 0f, 0f, floorA
+                    cx + ringCos[i] * lowMistRx, ringGroundY[i] + 0.35f, cz + ringSin[i] * lowMistRz, mr0, mg0, mb0, mA0,
+                    cx + ringCos[next] * lowMistRx, ringGroundY[next] + 0.35f, cz + ringSin[next] * lowMistRz, mr1, mg1, mb1, mA1,
+                    cx + ringCos[next] * lowMistRx, lowMistTopY, cz + ringSin[next] * lowMistRz, mr1, mg1, mb1, 0.0f,
+                    cx + ringCos[i] * lowMistRx, lowMistTopY, cz + ringSin[i] * lowMistRz, mr0, mg0, mb0, 0.0f
+                )
+                emitGlowQuad(
+                    darkBuf, matrix,
+                    cx + ringCos[i] * highMistRx, highMistBotY, cz + ringSin[i] * highMistRz, mr0, mg0, mb0, 0.0f,
+                    cx + ringCos[next] * highMistRx, highMistBotY, cz + ringSin[next] * highMistRz, mr1, mg1, mb1, 0.0f,
+                    cx + ringCos[next] * highMistRx, highMistTopY, cz + ringSin[next] * highMistRz, mr1, mg1, mb1, mA1 * 0.75f,
+                    cx + ringCos[i] * highMistRx, highMistTopY, cz + ringSin[i] * highMistRz, mr0, mg0, mb0, mA0 * 0.75f
                 )
             }
-            darkBuf.build()?.let { BufferUploader.drawWithShader(it) }
+            if (!useIrisPipeline && darkBuf is BufferBuilder) {
+                darkBuf.build()?.let { BufferUploader.drawWithShader(it) }
+            }
         }
 
         // =========================================================================
         // PASS 1: TRANSLUCENT QUADS (Battle Ring, Pokeball Emblem, Dome, Spotlights)
         // =========================================================================
-        val quadBuffer = tessellator.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR)
+        val quadBuffer: VertexConsumer = irisTransBuffer
 
         // 1A. Glowing Battle Ring Ribbon & Low Stadium Curb on the Ground
         val innerRingScale = 0.90f
@@ -664,11 +1127,11 @@ object ArenaZoneClient {
                 ix1, y1, iz1, r1, g1, b1, ringAlphaInner
             )
 
-            // Low vertical holographic stadium curb
+            // Low vertical holographic stadium curb (routed to irisAddBuffer under Iris for smooth fade to top)
             val curbAlphaBot = (0.58f + combinedGlow * 0.34f).coerceIn(0f, 0.94f)
             val curbAlphaTop = (0.04f + combinedGlow * 0.24f).coerceIn(0f, 0.45f)
-            emitQuad(
-                quadBuffer, matrix,
+            emitGlowQuad(
+                irisAddBuffer, matrix,
                 ox0, y0, oz0, r0, g0, b0, curbAlphaBot,
                 ox1, y1, oz1, r1, g1, b1, curbAlphaBot,
                 ox1, y1 + curbHeight, oz1, r1, g1, b1, curbAlphaTop,
@@ -678,7 +1141,7 @@ object ArenaZoneClient {
 
         // 1B. Central Pokeball Court Emblem
         val emblemR = (minR * 0.38f).coerceIn(1.6f, 16.0f)
-        val emblemY = centerY + 0.055f
+        val emblemY = centerY + 0.075f
         val outerBandInnerR = emblemR * 0.87f
         val buttonOuterR = emblemR * 0.27f
         val buttonInnerR = emblemR * 0.16f
@@ -739,12 +1202,13 @@ object ArenaZoneClient {
             val coreRCol = lerp(1.0f, 0.45f, pulse)
             val coreGCol = lerp(0.86f, 0.92f, pulse)
             val coreBCol = lerp(0.88f, 1.0f, pulse)
+            val coreInner = 0.02f
             emitQuad(
                 quadBuffer, matrix,
-                cx, emblemY + 0.006f, cz, 1.0f, 1.0f, 1.0f, coreAlpha,
+                cx + c0 * coreInner, emblemY + 0.006f, cz + s0 * coreInner, 1.0f, 1.0f, 1.0f, coreAlpha,
                 cx + c0 * coreR, emblemY + 0.006f, cz + s0 * coreR, coreRCol, coreGCol, coreBCol, coreAlpha * 0.72f,
                 cx + c1 * coreR, emblemY + 0.006f, cz + s1 * coreR, coreRCol, coreGCol, coreBCol, coreAlpha * 0.72f,
-                cx, emblemY + 0.006f, cz, 1.0f, 1.0f, 1.0f, coreAlpha
+                cx + c1 * coreInner, emblemY + 0.006f, cz + s1 * coreInner, 1.0f, 1.0f, 1.0f, coreAlpha
             )
         }
 
@@ -850,8 +1314,8 @@ object ArenaZoneClient {
             }
         }
 
-        // 1C. Arched 3D Holographic Stadium Dome (Fallback if domeEnergyShader not ready)
-        if (domeEnergyShader == null) {
+        // 1C. Arched 3D Holographic Stadium Dome (Fallback if domeEnergyShader not ready or Iris is active)
+        if (domeEnergyShader == null || useIrisPipeline) {
             for (l in 0 until DOME_LAT_STEPS) {
             val t0 = l.toFloat() / DOME_LAT_STEPS
             val t1 = (l + 1).toFloat() / DOME_LAT_STEPS
@@ -865,8 +1329,8 @@ object ArenaZoneClient {
             val wave0 = exp(-abs(h0 - domeWavePhase) * 6.5f) * domeWaveEnvelope
             val wave1 = exp(-abs(h1 - domeWavePhase) * 6.5f) * domeWaveEnvelope
 
-            val shellAlpha0 = (0.045f + (1f - h0) * 0.055f + wave0 * 0.14f).coerceIn(0f, 0.30f)
-            val shellAlpha1 = (0.040f + (1f - h1) * 0.055f + wave1 * 0.14f).coerceIn(0f, 0.30f)
+            val shellAlpha0 = (0.045f + (1f - h0) * 0.055f + wave0 * 0.16f).coerceIn(0f, 0.34f)
+            val shellAlpha1 = (0.040f + (1f - h1) * 0.055f + wave1 * 0.16f).coerceIn(0f, 0.34f)
 
             for (i in 0 until RING_SEGMENTS) {
                 val next = (i + 1) % RING_SEGMENTS
@@ -897,12 +1361,26 @@ object ArenaZoneClient {
                 val z01 = cz + ringSin[i] * rz * rad1
                 val y01 = lerp(ringGroundY[i] + 0.06f, domeApexY, h1)
 
-                emitQuad(
-                    quadBuffer, matrix,
-                    x00, y00, z00, r0, g0, bl0, shellAlpha0,
-                    x10, y10, z10, r1, g1, bl1, shellAlpha0,
-                    x11, y11, z11, r1, g1, bl1, shellAlpha1,
-                    x01, y01, z01, r0, g0, bl0, shellAlpha1
+                fun fresnelAlpha(vx: Float, vy: Float, vz: Float, cVal: Float, sVal: Float, radVal: Float, phiVal: Float, baseA: Float): Float {
+                    val vLen = sqrt(vx * vx + vy * vy + vz * vz).coerceAtLeast(0.001f)
+                    val nx = cVal * radVal; val ny = sin(phiVal); val nz = sVal * radVal
+                    val nLen = sqrt(nx * nx + ny * ny + nz * nz).coerceAtLeast(0.001f)
+                    val dotNV = abs((nx / nLen) * (-vx / vLen) + (ny / nLen) * (-vy / vLen) + (nz / nLen) * (-vz / vLen)).coerceIn(0f, 1f)
+                    val fres = Math.pow((1.0f - dotNV).toDouble(), 1.35).toFloat()
+                    return (baseA * (0.45f + fres * 1.15f)).coerceIn(0f, 0.44f)
+                }
+
+                val a00 = fresnelAlpha(x00, y00, z00, ringCos[i], ringSin[i], rad0, phi0, shellAlpha0)
+                val a10 = fresnelAlpha(x10, y10, z10, ringCos[next], ringSin[next], rad0, phi0, shellAlpha0)
+                val a11 = fresnelAlpha(x11, y11, z11, ringCos[next], ringSin[next], rad1, phi1, shellAlpha1)
+                val a01 = fresnelAlpha(x01, y01, z01, ringCos[i], ringSin[i], rad1, phi1, shellAlpha1)
+
+                emitGlowQuad(
+                    irisAddBuffer, matrix,
+                    x00, y00, z00, r0, g0, bl0, a00,
+                    x10, y10, z10, r1, g1, bl1, a10,
+                    x11, y11, z11, r1, g1, bl1, a11,
+                    x01, y01, z01, r0, g0, bl0, a01
                 )
             }
         }
@@ -993,12 +1471,13 @@ object ArenaZoneClient {
                     )
                 }
                 // Center glowing Pokeball button
+                val topBtnInner = 0.02f
                 emitQuad(
                     quadBuffer, matrix,
-                    cx, topY + 0.01f, cz, 1.0f, 1.0f, 1.0f, 0.55f + pulse * 0.25f,
+                    cx + c0 * topBtnInner, topY + 0.01f, cz + s0 * topBtnInner, 1.0f, 1.0f, 1.0f, 0.55f + pulse * 0.25f,
                     cx + c0 * topBtnR * 0.8f, topY + 0.01f, cz + s0 * topBtnR * 0.8f, 0.75f, 0.94f, 1.0f, 0.35f,
                     cx + c1 * topBtnR * 0.8f, topY + 0.01f, cz + s1 * topBtnR * 0.8f, 0.75f, 0.94f, 1.0f, 0.35f,
-                    cx, topY + 0.01f, cz, 1.0f, 1.0f, 1.0f, 0.55f + pulse * 0.25f
+                    cx + c1 * topBtnInner, topY + 0.01f, cz + s1 * topBtnInner, 1.0f, 1.0f, 1.0f, 0.55f + pulse * 0.25f
                 )
             }
             // Equatorial Pokeball bars on dome apex
@@ -1210,8 +1689,8 @@ object ArenaZoneClient {
                 val wg1 = (stadiumG(sb1) + 0.25f).coerceIn(0f, 1f)
                 val wb1 = (stadiumB(sb1) + 0.25f).coerceIn(0f, 1f)
                 val rIn = (courtWaveR - courtWaveThick).coerceAtLeast(0.05f)
-                emitQuad(
-                    quadBuffer, matrix,
+                emitGlowQuad(
+                    irisAddBuffer, matrix,
                     cx + c0 * rIn, cwY, cz + s0 * rIn, wr0, wg0, wb0, 0.0f,
                     cx + c0 * courtWaveR, cwY, cz + s0 * courtWaveR, wr0, wg0, wb0, courtWaveAlpha,
                     cx + c1 * courtWaveR, cwY, cz + s1 * courtWaveR, wr1, wg1, wb1, courtWaveAlpha,
@@ -1247,8 +1726,8 @@ object ArenaZoneClient {
             val sw = 0.095f
             val sh = 0.16f
 
-            emitQuad(
-                quadBuffer, matrix,
+            emitGlowQuad(
+                irisAddBuffer, matrix,
                 sx, sy - sh, sz, sr, sg, sb, sparkAlpha,
                 sx + sc * sw, sy, sz + ss * sw, 1.0f, 0.98f, 0.96f, sparkAlpha,
                 sx, sy + sh, sz, sr, sg, sb, sparkAlpha,
@@ -1256,7 +1735,9 @@ object ArenaZoneClient {
             )
         }
 
-        quadBuffer.build()?.let { BufferUploader.drawWithShader(it) }
+        if (!useIrisPipeline && quadBuffer is BufferBuilder) {
+            quadBuffer.build()?.let { BufferUploader.drawWithShader(it) }
+        }
 
         // =========================================================================
         val nowColorMs = System.currentTimeMillis()
@@ -1271,8 +1752,12 @@ object ArenaZoneClient {
         val isDaylightLaserMode = effectiveDarkness < 0.35f
 
         if (beamPower > 0.01f) {
-            val dayLaserBuffer = if (isDaylightLaserMode) {
-                tessellator.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR)
+            val dayLaserBuffer: VertexConsumer? = if (isDaylightLaserMode) {
+                if (useIrisPipeline) {
+                    irisAddBuffer
+                } else {
+                    tessellator.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR)
+                }
             } else {
                 null
             }
@@ -1320,21 +1805,32 @@ object ArenaZoneClient {
                         val laserBaseR = 0.14f * scaleMult
                         val laserTopR = 0.24f * scaleMult
                         val laserBaseA = (0.88f * beamPower * flickerMul * dayFade).coerceIn(0f, 0.92f)
+                        val laserSegs = if (usePhotonPipeline) 4 else 1
 
-                        for (k in 0 until sides) {
-                            val a0 = (k.toFloat() / sides) * twoPi
-                            val a1 = ((k + 1).toFloat() / sides) * twoPi
-                            val c0 = cos(a0); val s0 = sin(a0)
-                            val c1 = cos(a1); val s1 = sin(a1)
-                            val n0x = ux * c0 + vx * s0; val n0y = uy * c0 + vy * s0; val n0z = uz * c0 + vz * s0
-                            val n1x = ux * c1 + vx * s1; val n1y = uy * c1 + vy * s1; val n1z = uz * c1 + vz * s1
-                            emitQuad(
-                                dayLaserBuffer, matrix,
-                                px + n0x * laserBaseR, py + n0y * laserBaseR, pz + n0z * laserBaseR, sr, sg, sb, laserBaseA,
-                                px + n1x * laserBaseR, py + n1y * laserBaseR, pz + n1z * laserBaseR, sr, sg, sb, laserBaseA,
-                                tx + n1x * laserTopR, ty + n1y * laserTopR, tz + n1z * laserTopR, sr, sg, sb, 0.0f,
-                                tx + n0x * laserTopR, ty + n0y * laserTopR, tz + n0z * laserTopR, sr, sg, sb, 0.0f
-                            )
+                        for (seg in 0 until laserSegs) {
+                            val h0 = seg.toFloat() / laserSegs
+                            val h1 = (seg + 1).toFloat() / laserSegs
+                            val sx0 = lerp(px, tx, h0); val sy0 = lerp(py, ty, h0); val sz0 = lerp(pz, tz, h0)
+                            val sx1 = lerp(px, tx, h1); val sy1 = lerp(py, ty, h1); val sz1 = lerp(pz, tz, h1)
+                            val sr0 = lerp(laserBaseR, laserTopR, h0)
+                            val sr1 = lerp(laserBaseR, laserTopR, h1)
+                            val sa0 = laserBaseA * (1.0f - h0)
+                            val sa1 = laserBaseA * (1.0f - h1)
+                            for (k in 0 until sides) {
+                                val a0 = (k.toFloat() / sides) * twoPi
+                                val a1 = ((k + 1).toFloat() / sides) * twoPi
+                                val c0 = cos(a0); val s0 = sin(a0)
+                                val c1 = cos(a1); val s1 = sin(a1)
+                                val n0x = ux * c0 + vx * s0; val n0y = uy * c0 + vy * s0; val n0z = uz * c0 + vz * s0
+                                val n1x = ux * c1 + vx * s1; val n1y = uy * c1 + vy * s1; val n1z = uz * c1 + vz * s1
+                                emitGlowQuad(
+                                    dayLaserBuffer, matrix,
+                                    sx0 + n0x * sr0, sy0 + n0y * sr0, sz0 + n0z * sr0, sr, sg, sb, sa0,
+                                    sx0 + n1x * sr0, sy0 + n1y * sr0, sz0 + n1z * sr0, sr, sg, sb, sa0,
+                                    sx1 + n1x * sr1, sy1 + n1y * sr1, sz1 + n1z * sr1, sr, sg, sb, sa1,
+                                    sx1 + n0x * sr1, sy1 + n0y * sr1, sz1 + n0z * sr1, sr, sg, sb, sa1
+                                )
+                            }
                         }
 
                         // 3 ascending holographic pulse rings sliding up each daytime laser
@@ -1354,7 +1850,7 @@ object ArenaZoneClient {
                                 val c1 = cos(a1); val s1 = sin(a1)
                                 val n0x = ux * c0 + vx * s0; val n0y = uy * c0 + vy * s0; val n0z = uz * c0 + vz * s0
                                 val n1x = ux * c1 + vx * s1; val n1y = uy * c1 + vy * s1; val n1z = uz * c1 + vz * s1
-                                emitQuad(
+                                emitGlowQuad(
                                     dayLaserBuffer, matrix,
                                     rxPos + n0x * ringR, ryPos + n0y * ringR, rzPos + n0z * ringR, 1.0f, 0.96f, 0.98f, ringA,
                                     rxPos + n1x * ringR, ryPos + n1y * ringR, rzPos + n1z * ringR, 1.0f, 0.96f, 0.98f, ringA,
@@ -1366,13 +1862,19 @@ object ArenaZoneClient {
                     }
                 }
             }
-            dayLaserBuffer?.build()?.let { BufferUploader.drawWithShader(it) }
+            if (!useIrisPipeline && dayLaserBuffer is BufferBuilder) {
+                dayLaserBuffer.build()?.let { BufferUploader.drawWithShader(it) }
+            }
         }
 
         // PASS 1B: ADDITIVE BLOOM (Living Dome Cable Pulses + Multi-Rod Outer Bloom & Sky Discs)
         // =========================================================================
         RenderSystem.blendFunc(GlStateManager.SourceFactor.SRC_ALPHA, GlStateManager.DestFactor.ONE)
-        val bloomBuffer = tessellator.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR)
+        val bloomBuffer: VertexConsumer = if (useIrisPipeline) {
+            irisAddBuffer
+        } else {
+            tessellator.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR)
+        }
         val skyCeilingY = centerY + skyBeamHeight
 
         // Living holographic bloom pulses traveling smoothly along the 16 dome cable meridians
@@ -1403,7 +1905,7 @@ object ArenaZoneClient {
 
                     val x0 = cx + c * rx * rad0; val y0 = lerp(gy, domeApexY, h0); val z0 = cz + s * rz * rad0
                     val x1 = cx + c * rx * rad1; val y1 = lerp(gy, domeApexY, h1); val z1 = cz + s * rz * rad1
-                    emitQuad(
+                    emitGlowQuad(
                         bloomBuffer, matrix,
                         x0 - perpX, y0, z0 - perpZ, br, bg, bb, a0,
                         x0 + perpX, y0, z0 + perpZ, br, bg, bb, a0,
@@ -1451,7 +1953,7 @@ object ArenaZoneClient {
                     val bc1x = bx + (arx * c1 + avx * s1) * backR; val bc1y = by + (avy * s1) * backR; val bc1z = bz + (arz * c1 + avz * s1) * backR
                     val fc0x = px + (arx * c0 + avx * s0) * frontR; val fc0y = py + (avy * s0) * frontR; val fc0z = pz + (arz * c0 + avz * s0) * frontR
                     val fc1x = px + (arx * c1 + avx * s1) * frontR; val fc1y = py + (avy * s1) * frontR; val fc1z = pz + (arz * c1 + avz * s1) * frontR
-                    emitQuad(
+                    emitGlowQuad(
                         bloomBuffer, matrix,
                         bc0x, bc0y, bc0z, sr, sg, sb, fixtureA * 0.45f,
                         bc1x, bc1y, bc1z, sr, sg, sb, fixtureA * 0.45f,
@@ -1459,16 +1961,19 @@ object ArenaZoneClient {
                         fc0x, fc0y, fc0z, sr, sg, sb, fixtureA * 0.85f
                     )
                     // Incandescent front lens disc centered at (px, py, pz)
-                    emitQuad(
+                    val lInR = 0.015f
+                    val lc0x = px + (arx * c0 + avx * s0) * lInR; val lc0y = py + (avy * s0) * lInR; val lc0z = pz + (arz * c0 + avz * s0) * lInR
+                    val lc1x = px + (arx * c1 + avx * s1) * lInR; val lc1y = py + (avy * s1) * lInR; val lc1z = pz + (arz * c1 + avz * s1) * lInR
+                    emitGlowQuad(
                         bloomBuffer, matrix,
-                        px, py, pz, 1.0f, 0.98f, 1.0f, (fixtureA * 1.45f).coerceIn(0f, 0.95f),
+                        lc0x, lc0y, lc0z, 1.0f, 0.98f, 1.0f, (fixtureA * 1.45f).coerceIn(0f, 0.95f),
                         fc0x, fc0y, fc0z, sr, sg, sb, fixtureA * 0.75f,
                         fc1x, fc1y, fc1z, sr, sg, sb, fixtureA * 0.75f,
-                        px, py, pz, 1.0f, 0.98f, 1.0f, (fixtureA * 1.45f).coerceIn(0f, 0.95f)
+                        lc1x, lc1y, lc1z, 1.0f, 0.98f, 1.0f, (fixtureA * 1.45f).coerceIn(0f, 0.95f)
                     )
                     // Soft glowing ground ring around pedestal
                     val gInner = 0.25f; val gOuter = 0.78f
-                    emitQuad(
+                    emitGlowQuad(
                         bloomBuffer, matrix,
                         baseX + c0 * gInner, baseY + 0.03f, baseZ + s0 * gInner, sr, sg, sb, fixtureA * 0.55f,
                         baseX + c1 * gInner, baseY + 0.03f, baseZ + s1 * gInner, sr, sg, sb, fixtureA * 0.55f,
@@ -1495,14 +2000,14 @@ object ArenaZoneClient {
                 val flareR = 1.45f * (0.85f + 0.15f * pulse)
                 val flareH = 0.24f
                 // Horizontal star diamond
-                emitQuad(
+                emitGlowQuad(
                     bloomBuffer, matrix,
                     px - flareR, py, pz, sr, sg, sb, 0.0f,
                     px, py, pz - flareH, 1.0f, 0.96f, 0.98f, lensA,
                     px + flareR, py, pz, sr, sg, sb, 0.0f,
                     px, py, pz + flareH, 1.0f, 0.96f, 0.98f, lensA
                 )
-                emitQuad(
+                emitGlowQuad(
                     bloomBuffer, matrix,
                     px, py, pz - flareR, sr, sg, sb, 0.0f,
                     px + flareH, py, pz, 1.0f, 0.96f, 0.98f, lensA,
@@ -1510,14 +2015,14 @@ object ArenaZoneClient {
                     px - flareH, py, pz, 1.0f, 0.96f, 0.98f, lensA
                 )
                 // Vertical star cross
-                emitQuad(
+                emitGlowQuad(
                     bloomBuffer, matrix,
                     px - flareH, py, pz, 1.0f, 0.96f, 0.98f, lensA * 0.85f,
                     px, py + flareR * 0.85f, pz, sr, sg, sb, 0.0f,
                     px + flareH, py, pz, 1.0f, 0.96f, 0.98f, lensA * 0.85f,
                     px, py - flareR * 0.35f, pz, sr, sg, sb, 0.0f
                 )
-                emitQuad(
+                emitGlowQuad(
                     bloomBuffer, matrix,
                     px, py, pz - flareH, 1.0f, 0.96f, 0.98f, lensA * 0.85f,
                     px, py + flareR * 0.85f, pz, sr, sg, sb, 0.0f,
@@ -1557,14 +2062,14 @@ object ArenaZoneClient {
                     val mr = lerp(1.0f, sr, 0.45f)
                     val mg = lerp(1.0f, sg, 0.45f)
                     val mb = lerp(1.0f, sb, 0.45f)
-                    emitQuad(
+                    emitGlowQuad(
                         bloomBuffer, matrix,
                         mxPos - mUx * ms, myPos - mUy * ms, mzPos - mUz * ms, mr, mg, mb, moteA,
                         mxPos - mVx * ms, myPos - mVy * ms, mzPos - mVz * ms, mr, mg, mb, moteA,
                         mxPos + mUx * ms, myPos + mUy * ms, mzPos + mUz * ms, mr, mg, mb, moteA,
                         mxPos + mVx * ms, myPos + mVy * ms, mzPos + mVz * ms, mr, mg, mb, moteA
                     )
-                    emitQuad(
+                    emitGlowQuad(
                         bloomBuffer, matrix,
                         mxPos - mUx * ms, myPos - mUy * ms - ms, mzPos - mUz * ms, mr, mg, mb, moteA * 0.8f,
                         mxPos + mUx * ms, myPos + mUy * ms - ms, mzPos + mUz * ms, mr, mg, mb, moteA * 0.8f,
@@ -1575,39 +2080,42 @@ object ArenaZoneClient {
             }
         }
 
-        // Broad overhead stadium sky-wash canopy at 300 blocks (fades out inside the dark room so the ceiling stays pure black)
-        val canopyOuterR = maxOf(rx, rz) * 2.4f + 45.0f
-        val canopyMidR = canopyOuterR * 0.45f
-        val canopyAlpha = ((0.09f + pulse * 0.04f) * (1.0f - insideDarkRoomFactor * 0.90f)).coerceIn(0f, 0.16f)
-        for (i in 0 until 24) {
-            val a0 = (i / 24.0f) * twoPi
-            val a1 = ((i + 1) / 24.0f) * twoPi
-            val c0 = cos(a0)
-            val s0 = sin(a0)
-            val c1 = cos(a1)
-            val s1 = sin(a1)
-            val b0 = ((s0 * 1.4f) * 0.5f + 0.5f).coerceIn(0f, 1f)
-            val b1 = ((s1 * 1.4f) * 0.5f + 0.5f).coerceIn(0f, 1f)
-            val r0 = stadiumR(b0)
-            val g0 = stadiumG(b0)
-            val bl0 = stadiumB(b0)
-            val r1 = stadiumR(b1)
-            val g1 = stadiumG(b1)
-            val bl1 = stadiumB(b1)
-            emitQuad(
-                bloomBuffer, matrix,
-                cx, skyCeilingY, cz, 0.72f, 0.68f, 0.95f, canopyAlpha * 1.15f,
-                cx + c0 * canopyMidR, skyCeilingY - 3.0f, cz + s0 * canopyMidR, r0, g0, bl0, canopyAlpha * 0.65f,
-                cx + c1 * canopyMidR, skyCeilingY - 3.0f, cz + s1 * canopyMidR, r1, g1, bl1, canopyAlpha * 0.65f,
-                cx, skyCeilingY, cz, 0.72f, 0.68f, 0.95f, canopyAlpha * 1.15f
-            )
-            emitQuad(
-                bloomBuffer, matrix,
-                cx + c0 * canopyMidR, skyCeilingY - 3.0f, cz + s0 * canopyMidR, r0, g0, bl0, canopyAlpha * 0.65f,
-                cx + c0 * canopyOuterR, skyCeilingY - 10.0f, cz + s0 * canopyOuterR, r0, g0, bl0, 0.0f,
-                cx + c1 * canopyOuterR, skyCeilingY - 10.0f, cz + s1 * canopyOuterR, r1, g1, bl1, 0.0f,
-                cx + c1 * canopyMidR, skyCeilingY - 3.0f, cz + s1 * canopyMidR, r1, g1, bl1, canopyAlpha * 0.65f
-            )
+        // Broad overhead stadium sky-wash canopy in vanilla (skipped under Iris/Photon so shaders don't render an opaque sky disc)
+        if (!useIrisPipeline) {
+            val canopyOuterR = maxOf(rx, rz) * 2.4f + 45.0f
+            val canopyMidR = canopyOuterR * 0.45f
+            val canopyInnerR = 0.25f
+            val canopyAlpha = ((0.09f + pulse * 0.04f) * (1.0f - insideDarkRoomFactor * 0.90f)).coerceIn(0f, 0.16f)
+            for (i in 0 until 24) {
+                val a0 = (i / 24.0f) * twoPi
+                val a1 = ((i + 1) / 24.0f) * twoPi
+                val c0 = cos(a0)
+                val s0 = sin(a0)
+                val c1 = cos(a1)
+                val s1 = sin(a1)
+                val b0 = ((s0 * 1.4f) * 0.5f + 0.5f).coerceIn(0f, 1f)
+                val b1 = ((s1 * 1.4f) * 0.5f + 0.5f).coerceIn(0f, 1f)
+                val r0 = stadiumR(b0)
+                val g0 = stadiumG(b0)
+                val bl0 = stadiumB(b0)
+                val r1 = stadiumR(b1)
+                val g1 = stadiumG(b1)
+                val bl1 = stadiumB(b1)
+                emitQuad(
+                    bloomBuffer, matrix,
+                    cx + c0 * canopyInnerR, skyCeilingY, cz + s0 * canopyInnerR, 0.72f, 0.68f, 0.95f, canopyAlpha * 1.15f,
+                    cx + c0 * canopyMidR, skyCeilingY - 3.0f, cz + s0 * canopyMidR, r0, g0, bl0, canopyAlpha * 0.65f,
+                    cx + c1 * canopyMidR, skyCeilingY - 3.0f, cz + s1 * canopyMidR, r1, g1, bl1, canopyAlpha * 0.65f,
+                    cx + c1 * canopyInnerR, skyCeilingY, cz + s1 * canopyInnerR, 0.72f, 0.68f, 0.95f, canopyAlpha * 1.15f
+                )
+                emitQuad(
+                    bloomBuffer, matrix,
+                    cx + c0 * canopyMidR, skyCeilingY - 3.0f, cz + s0 * canopyMidR, r0, g0, bl0, canopyAlpha * 0.65f,
+                    cx + c0 * canopyOuterR, skyCeilingY - 10.0f, cz + s0 * canopyOuterR, r0, g0, bl0, 0.0f,
+                    cx + c1 * canopyOuterR, skyCeilingY - 10.0f, cz + s1 * canopyOuterR, r1, g1, bl1, 0.0f,
+                    cx + c1 * canopyMidR, skyCeilingY - 3.0f, cz + s1 * canopyMidR, r1, g1, bl1, canopyAlpha * 0.65f
+                )
+            }
         }
 
         // Interior 2: Perimeter Audio-Pulse Equalizer Bars synced EXCLUSIVELY to the dome music channel
@@ -1628,7 +2136,7 @@ object ArenaZoneClient {
                 val bandEnergy = bands[bIdx % 8].coerceIn(0.0f, 1.0f)
                 val barH = (0.24f + bandEnergy * 2.35f) * radiusScale.coerceAtMost(1.8f)
                 val barA = (0.24f + bandEnergy * 0.62f).coerceIn(0f, 0.86f)
-                emitQuad(
+                emitGlowQuad(
                     bloomBuffer, matrix,
                     bx - perpX, by, bz - perpZ, er, eg, eb, barA,
                     bx + perpX, by, bz + perpZ, er, eg, eb, barA,
@@ -1647,7 +2155,7 @@ object ArenaZoneClient {
                 val next = (i + 2) % RING_SEGMENTS
                 val b0 = ringSideBlend[i]; val b1 = ringSideBlend[next]
                 val y0 = ringGroundY[i] + 0.05f; val y1 = ringGroundY[next] + 0.05f
-                emitQuad(
+                emitGlowQuad(
                     bloomBuffer, matrix,
                     cx + ringCos[i] * hazeRIn, y0 + 0.35f, cz + ringSin[i] * hazeZIn, stadiumR(b0), stadiumG(b0), stadiumB(b0), 0.0f,
                     cx + ringCos[i] * hazeROut, y0, cz + ringSin[i] * hazeZOut, stadiumR(b0), stadiumG(b0), stadiumB(b0), hazeA,
@@ -1671,14 +2179,14 @@ object ArenaZoneClient {
                 val ea = (0.55f * eEnv * (0.45f + 0.55f * maxOf(pulse, insideDarkRoomFactor))).coerceIn(0f, 0.75f)
                 if (ea <= 0.01f) continue
                 val es = 0.085f + 0.04f * pulse
-                emitQuad(
+                emitGlowQuad(
                     bloomBuffer, matrix,
                     ex - es, ey, ez, er, eg, eb, ea,
                     ex, ey - es, ez, 1.0f, 0.96f, 1.0f, ea,
                     ex + es, ey, ez, er, eg, eb, ea,
                     ex, ey + es, ez, 1.0f, 0.96f, 1.0f, ea
                 )
-                emitQuad(
+                emitGlowQuad(
                     bloomBuffer, matrix,
                     ex, ey, ez - es, er, eg, eb, ea,
                     ex, ey - es, ez, 1.0f, 0.96f, 1.0f, ea,
@@ -1688,14 +2196,23 @@ object ArenaZoneClient {
             }
         }
 
-        bloomBuffer.build()?.let { BufferUploader.drawWithShader(it) }
+        if (!useIrisPipeline && bloomBuffer is BufferBuilder) {
+            bloomBuffer.build()?.let { BufferUploader.drawWithShader(it) }
+        }
 
-        // PASS 1C: GPU CORE SHADER VOLUMETRIC CONCERT BEAMS (Fresnel + Animated Stage Haze)
+        // PASS 1C: GPU CORE SHADER VOLUMETRIC CONCERT BEAMS (or Iris Fresnel-softened volumetric beams via RenderType.eyes)
         val beamShader = concertBeamShader
-        if (beamShader != null && !isDaylightLaserMode && beamPower > 0.01f) {
-            RenderSystem.setShader { beamShader }
-            val shaderBuffer = tessellator.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_TEX_COLOR_NORMAL)
-            val sides = 12
+        if (!isDaylightLaserMode && beamPower > 0.01f && (useIrisPipeline || beamShader != null)) {
+            if (!useIrisPipeline && beamShader != null) {
+                RenderSystem.setShader { beamShader }
+            }
+            val shaderBuffer: VertexConsumer = if (useIrisPipeline) {
+                irisAddBuffer
+            } else {
+                tessellator.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_TEX_COLOR_NORMAL)
+            }
+            val sides = if (usePhotonPipeline) 16 else 12
+            val irisSlices = if (usePhotonPipeline) 10 else 6
 
             for (sIdx in 0 until numSpotlights) {
                 val px = lensX[sIdx]
@@ -1743,37 +2260,124 @@ object ArenaZoneClient {
                     val outerTopR = 5.60f * scaleMult
                     val outerA = ((0.30f + pulse * 0.08f) * beamPower * flickerMul).coerceIn(0f, 0.52f)
 
-                    for (k in 0 until sides) {
-                        val u0 = k.toFloat() / sides
-                        val u1 = (k + 1).toFloat() / sides
-                        val a0 = u0 * twoPi
-                        val a1 = u1 * twoPi
-                        val c0 = cos(a0); val s0 = sin(a0)
-                        val c1 = cos(a1); val s1 = sin(a1)
+                    if (useIrisPipeline) {
+                        for (slice in 0 until irisSlices) {
+                            val h0 = slice.toFloat() / irisSlices
+                            val h1 = (slice + 1).toFloat() / irisSlices
+                            val baseFade0 = smoothStep((h0 / 0.05f).toDouble()).toFloat()
+                            val baseFade1 = smoothStep((h1 / 0.05f).toDouble()).toFloat()
+                            val topFade0 = Math.pow((1.0f - h0).toDouble(), 1.45).toFloat()
+                            val topFade1 = Math.pow((1.0f - h1).toDouble(), 1.45).toFloat()
 
-                        val n0x = ux * c0 + vx * s0; val n0y = uy * c0 + vy * s0; val n0z = uz * c0 + vz * s0
-                        val n1x = ux * c1 + vx * s1; val n1y = uy * c1 + vy * s1; val n1z = uz * c1 + vz * s1
+                            val cx0 = lerp(px, tx, h0); val cy0 = lerp(py, ty, h0); val cz0 = lerp(pz, tz, h0)
+                            val cx1 = lerp(px, tx, h1); val cy1 = lerp(py, ty, h1); val cz1 = lerp(pz, tz, h1)
 
-                        // Inner volumetric beam
-                        shaderBuffer.addVertex(matrix, px + n0x * innerBaseR, py + n0y * innerBaseR, pz + n0z * innerBaseR).setUv(u0, 0.0f).setColor(sr, sg, sb, innerA).setNormal(n0x, n0y, n0z)
-                        shaderBuffer.addVertex(matrix, px + n1x * innerBaseR, py + n1y * innerBaseR, pz + n1z * innerBaseR).setUv(u1, 0.0f).setColor(sr, sg, sb, innerA).setNormal(n1x, n1y, n1z)
-                        shaderBuffer.addVertex(matrix, tx + n1x * innerTopR, ty + n1y * innerTopR, tz + n1z * innerTopR).setUv(u1, 1.0f).setColor(sr, sg, sb, innerA).setNormal(n1x, n1y, n1z)
-                        shaderBuffer.addVertex(matrix, tx + n0x * innerTopR, ty + n0y * innerTopR, tz + n0z * innerTopR).setUv(u0, 1.0f).setColor(sr, sg, sb, innerA).setNormal(n0x, n0y, n0z)
+                            val inR0 = lerp(innerBaseR, innerTopR, h0)
+                            val inR1 = lerp(innerBaseR, innerTopR, h1)
+                            val outR0 = lerp(outerBaseR, outerTopR, h0)
+                            val outR1 = lerp(outerBaseR, outerTopR, h1)
 
-                        // Outer atmospheric haze halo
-                        shaderBuffer.addVertex(matrix, px + n0x * outerBaseR, py + n0y * outerBaseR, pz + n0z * outerBaseR).setUv(u0, 0.0f).setColor(sr, sg, sb, outerA).setNormal(n0x, n0y, n0z)
-                        shaderBuffer.addVertex(matrix, px + n1x * outerBaseR, py + n1y * outerBaseR, pz + n1z * outerBaseR).setUv(u1, 0.0f).setColor(sr, sg, sb, outerA).setNormal(n1x, n1y, n1z)
-                        shaderBuffer.addVertex(matrix, tx + n1x * outerTopR, ty + n1y * outerTopR, tz + n1z * outerTopR).setUv(u1, 1.0f).setColor(sr, sg, sb, outerA).setNormal(n1x, n1y, n1z)
-                        shaderBuffer.addVertex(matrix, tx + n0x * outerTopR, ty + n0y * outerTopR, tz + n0z * outerTopR).setUv(u0, 1.0f).setColor(sr, sg, sb, outerA).setNormal(n0x, n0y, n0z)
+                            val hot0 = exp(-h0 * 9.0f)
+                            val hot1 = exp(-h1 * 9.0f)
+
+                            for (k in 0 until sides) {
+                                val a0 = (k.toFloat() / sides) * twoPi
+                                val a1 = ((k + 1).toFloat() / sides) * twoPi
+                                val c0 = cos(a0); val s0 = sin(a0)
+                                val c1 = cos(a1); val s1 = sin(a1)
+
+                                val n0x = ux * c0 + vx * s0; val n0y = uy * c0 + vy * s0; val n0z = uz * c0 + vz * s0
+                                val n1x = ux * c1 + vx * s1; val n1y = uy * c1 + vy * s1; val n1z = uz * c1 + vz * s1
+
+                                fun beamVertex(vpx: Float, vpy: Float, vpz: Float, nx: Float, ny: Float, nz: Float, baseA: Float, bFade: Float, tFade: Float, hot: Float): FloatArray {
+                                    val dist = sqrt(vpx * vpx + vpy * vpy + vpz * vpz).coerceAtLeast(0.001f)
+                                    val facing = abs(nx * (-vpx / dist) + ny * (-vpy / dist) + nz * (-vpz / dist)).coerceIn(0f, 1f)
+                                    val edgeSoft = Math.pow(facing.toDouble(), 1.75).toFloat()
+                                    val whiteMix = (hot * facing * 0.65f).coerceIn(0f, 0.75f)
+                                    val vr = lerp(sr, 1.0f, whiteMix)
+                                    val vg = lerp(sg, 0.98f, whiteMix)
+                                    val vb = lerp(sb, 1.0f, whiteMix)
+                                    val va = (baseA * bFade * tFade * edgeSoft).coerceIn(0f, 0.72f)
+                                    return floatArrayOf(vr, vg, vb, va)
+                                }
+
+                                val iv00x = cx0 + n0x * inR0; val iv00y = cy0 + n0y * inR0; val iv00z = cz0 + n0z * inR0
+                                val iv10x = cx0 + n1x * inR0; val iv10y = cy0 + n1y * inR0; val iv10z = cz0 + n1z * inR0
+                                val iv11x = cx1 + n1x * inR1; val iv11y = cy1 + n1y * inR1; val iv11z = cz1 + n1z * inR1
+                                val iv01x = cx1 + n0x * inR1; val iv01y = cy1 + n0y * inR1; val iv01z = cz1 + n0z * inR1
+
+                                val ic00 = beamVertex(iv00x, iv00y, iv00z, n0x, n0y, n0z, innerA * 0.42f, baseFade0, topFade0, hot0)
+                                val ic10 = beamVertex(iv10x, iv10y, iv10z, n1x, n1y, n1z, innerA * 0.42f, baseFade0, topFade0, hot0)
+                                val ic11 = beamVertex(iv11x, iv11y, iv11z, n1x, n1y, n1z, innerA * 0.42f, baseFade1, topFade1, hot1)
+                                val ic01 = beamVertex(iv01x, iv01y, iv01z, n0x, n0y, n0z, innerA * 0.42f, baseFade1, topFade1, hot1)
+
+                                emitGlowQuad(
+                                    shaderBuffer, matrix,
+                                    iv00x, iv00y, iv00z, ic00[0], ic00[1], ic00[2], ic00[3],
+                                    iv10x, iv10y, iv10z, ic10[0], ic10[1], ic10[2], ic10[3],
+                                    iv11x, iv11y, iv11z, ic11[0], ic11[1], ic11[2], ic11[3],
+                                    iv01x, iv01y, iv01z, ic01[0], ic01[1], ic01[2], ic01[3]
+                                )
+
+                                val ov00x = cx0 + n0x * outR0; val ov00y = cy0 + n0y * outR0; val ov00z = cz0 + n0z * outR0
+                                val ov10x = cx0 + n1x * outR0; val ov10y = cy0 + n1y * outR0; val ov10z = cz0 + n1z * outR0
+                                val ov11x = cx1 + n1x * outR1; val ov11y = cy1 + n1y * outR1; val ov11z = cz1 + n1z * outR1
+                                val ov01x = cx1 + n0x * outR1; val ov01y = cy1 + n0y * outR1; val ov01z = cz1 + n0z * outR1
+
+                                val oc00 = beamVertex(ov00x, ov00y, ov00z, n0x, n0y, n0z, outerA * 0.30f, baseFade0, topFade0, 0f)
+                                val oc10 = beamVertex(ov10x, ov10y, ov10z, n1x, n1y, n1z, outerA * 0.30f, baseFade0, topFade0, 0f)
+                                val oc11 = beamVertex(ov11x, ov11y, ov11z, n1x, n1y, n1z, outerA * 0.30f, baseFade1, topFade1, 0f)
+                                val oc01 = beamVertex(ov01x, ov01y, ov01z, n0x, n0y, n0z, outerA * 0.30f, baseFade1, topFade1, 0f)
+
+                                emitGlowQuad(
+                                    shaderBuffer, matrix,
+                                    ov00x, ov00y, ov00z, oc00[0], oc00[1], oc00[2], oc00[3],
+                                    ov10x, ov10y, ov10z, oc10[0], oc10[1], oc10[2], oc10[3],
+                                    ov11x, ov11y, ov11z, oc11[0], oc11[1], oc11[2], oc11[3],
+                                    ov01x, ov01y, ov01z, oc01[0], oc01[1], oc01[2], oc01[3]
+                                )
+                            }
+                        }
+                    } else {
+                        for (k in 0 until sides) {
+                            val u0 = k.toFloat() / sides
+                            val u1 = (k + 1).toFloat() / sides
+                            val a0 = u0 * twoPi
+                            val a1 = u1 * twoPi
+                            val c0 = cos(a0); val s0 = sin(a0)
+                            val c1 = cos(a1); val s1 = sin(a1)
+
+                            val n0x = ux * c0 + vx * s0; val n0y = uy * c0 + vy * s0; val n0z = uz * c0 + vz * s0
+                            val n1x = ux * c1 + vx * s1; val n1y = uy * c1 + vy * s1; val n1z = uz * c1 + vz * s1
+
+                            normalMatrix.transform(normalTmp.set(n0x, n0y, n0z)).normalize()
+                            val vn0x = normalTmp.x; val vn0y = normalTmp.y; val vn0z = normalTmp.z
+                            normalMatrix.transform(normalTmp.set(n1x, n1y, n1z)).normalize()
+                            val vn1x = normalTmp.x; val vn1y = normalTmp.y; val vn1z = normalTmp.z
+
+                            // Inner volumetric beam
+                            shaderBuffer.addVertex(matrix, px + n0x * innerBaseR, py + n0y * innerBaseR, pz + n0z * innerBaseR).setUv(u0, 0.0f).setColor(sr, sg, sb, innerA).setNormal(vn0x, vn0y, vn0z)
+                            shaderBuffer.addVertex(matrix, px + n1x * innerBaseR, py + n1y * innerBaseR, pz + n1z * innerBaseR).setUv(u1, 0.0f).setColor(sr, sg, sb, innerA).setNormal(vn1x, vn1y, vn1z)
+                            shaderBuffer.addVertex(matrix, tx + n1x * innerTopR, ty + n1y * innerTopR, tz + n1z * innerTopR).setUv(u1, 1.0f).setColor(sr, sg, sb, innerA).setNormal(vn1x, vn1y, vn1z)
+                            shaderBuffer.addVertex(matrix, tx + n0x * innerTopR, ty + n0y * innerTopR, tz + n0z * innerTopR).setUv(u0, 1.0f).setColor(sr, sg, sb, innerA).setNormal(vn0x, vn0y, vn0z)
+
+                            // Outer atmospheric haze halo
+                            shaderBuffer.addVertex(matrix, px + n0x * outerBaseR, py + n0y * outerBaseR, pz + n0z * outerBaseR).setUv(u0, 0.0f).setColor(sr, sg, sb, outerA).setNormal(vn0x, vn0y, vn0z)
+                            shaderBuffer.addVertex(matrix, px + n1x * outerBaseR, py + n1y * outerBaseR, pz + n1z * outerBaseR).setUv(u1, 0.0f).setColor(sr, sg, sb, outerA).setNormal(vn1x, vn1y, vn1z)
+                            shaderBuffer.addVertex(matrix, tx + n1x * outerTopR, ty + n1y * outerTopR, tz + n1z * outerTopR).setUv(u1, 1.0f).setColor(sr, sg, sb, outerA).setNormal(vn1x, vn1y, vn1z)
+                            shaderBuffer.addVertex(matrix, tx + n0x * outerTopR, ty + n0y * outerTopR, tz + n0z * outerTopR).setUv(u0, 1.0f).setColor(sr, sg, sb, outerA).setNormal(vn0x, vn0y, vn0z)
+                        }
                     }
                 }
             }
-            shaderBuffer.build()?.let { BufferUploader.drawWithShader(it) }
-            RenderSystem.setShader { GameRenderer.getPositionColorShader() }
+            if (!useIrisPipeline && shaderBuffer is BufferBuilder) {
+                shaderBuffer.build()?.let { BufferUploader.drawWithShader(it) }
+                RenderSystem.setShader { GameRenderer.getPositionColorShader() }
+            }
         }
-        // PASS 1D: GPU CORE SHADER HOLOGRAPHIC HEX-SHIELD DOME (Exterior 1)
+        // PASS 1D: GPU CORE SHADER HOLOGRAPHIC HEX-SHIELD DOME (Exterior 1 - skipped when Iris active; fallback in PASS 1 handles it)
         val domeShader = domeEnergyShader
-        if (domeShader != null) {
+        if (!useIrisPipeline && domeShader != null) {
             RenderSystem.setShader { domeShader }
             val domeBuffer = tessellator.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_TEX_COLOR_NORMAL)
             for (l in 0 until DOME_LAT_STEPS) {
@@ -1801,10 +2405,19 @@ object ArenaZoneClient {
                     val x11 = cx + ringCos[next] * rx * rad1; val z11 = cz + ringSin[next] * rz * rad1; val y11 = lerp(ringGroundY[next] + 0.06f, domeApexY, h1)
                     val x01 = cx + ringCos[i] * rx * rad1; val z01 = cz + ringSin[i] * rz * rad1; val y01 = lerp(ringGroundY[i] + 0.06f, domeApexY, h1)
 
-                    domeBuffer.addVertex(matrix, x00, y00, z00).setUv(u0, h0).setColor(r0, g0, bl0, baseA0).setNormal(ringCos[i] * rad0, ny0, ringSin[i] * rad0)
-                    domeBuffer.addVertex(matrix, x10, y10, z10).setUv(u1, h0).setColor(r1, g1, bl1, baseA0).setNormal(ringCos[next] * rad0, ny0, ringSin[next] * rad0)
-                    domeBuffer.addVertex(matrix, x11, y11, z11).setUv(u1, h1).setColor(r1, g1, bl1, baseA1).setNormal(ringCos[next] * rad1, ny1, ringSin[next] * rad1)
-                    domeBuffer.addVertex(matrix, x01, y01, z01).setUv(u0, h1).setColor(r0, g0, bl0, baseA1).setNormal(ringCos[i] * rad1, ny1, ringSin[i] * rad1)
+                    normalMatrix.transform(normalTmp.set(ringCos[i] * rad0, ny0, ringSin[i] * rad0)).normalize()
+                    val vn00x = normalTmp.x; val vn00y = normalTmp.y; val vn00z = normalTmp.z
+                    normalMatrix.transform(normalTmp.set(ringCos[next] * rad0, ny0, ringSin[next] * rad0)).normalize()
+                    val vn10x = normalTmp.x; val vn10y = normalTmp.y; val vn10z = normalTmp.z
+                    normalMatrix.transform(normalTmp.set(ringCos[next] * rad1, ny1, ringSin[next] * rad1)).normalize()
+                    val vn11x = normalTmp.x; val vn11y = normalTmp.y; val vn11z = normalTmp.z
+                    normalMatrix.transform(normalTmp.set(ringCos[i] * rad1, ny1, ringSin[i] * rad1)).normalize()
+                    val vn01x = normalTmp.x; val vn01y = normalTmp.y; val vn01z = normalTmp.z
+
+                    domeBuffer.addVertex(matrix, x00, y00, z00).setUv(u0, h0).setColor(r0, g0, bl0, baseA0).setNormal(vn00x, vn00y, vn00z)
+                    domeBuffer.addVertex(matrix, x10, y10, z10).setUv(u1, h0).setColor(r1, g1, bl1, baseA0).setNormal(vn10x, vn10y, vn10z)
+                    domeBuffer.addVertex(matrix, x11, y11, z11).setUv(u1, h1).setColor(r1, g1, bl1, baseA1).setNormal(vn11x, vn11y, vn11z)
+                    domeBuffer.addVertex(matrix, x01, y01, z01).setUv(u0, h1).setColor(r0, g0, bl0, baseA1).setNormal(vn01x, vn01y, vn01z)
                 }
             }
             domeBuffer.build()?.let { BufferUploader.drawWithShader(it) }
@@ -1819,9 +2432,12 @@ object ArenaZoneClient {
         RenderSystem.enableDepthTest()
         RenderSystem.depthFunc(org.lwjgl.opengl.GL11.GL_LEQUAL)
         RenderSystem.depthMask(false)
-        RenderSystem.disablePolygonOffset()
         RenderSystem.lineWidth(4.5f)
-        val lineBuffer = tessellator.begin(VertexFormat.Mode.DEBUG_LINES, DefaultVertexFormat.POSITION_COLOR)
+        val lineBuffer: VertexConsumer = if (useIrisPipeline) {
+            irisAddBuffer
+        } else {
+            tessellator.begin(VertexFormat.Mode.DEBUG_LINES, DefaultVertexFormat.POSITION_COLOR)
+        }
         val lineBaseAlpha = 0.84f + pulse * 0.14f
 
         // 2A. Inner & Outer Battle Ring Neon Borders
@@ -2051,7 +2667,43 @@ object ArenaZoneClient {
             }
         }
 
-        lineBuffer.build()?.let { BufferUploader.drawWithShader(it) }
+        if (usePhotonPipeline) {
+            RenderSystem.setShader(GameRenderer::getPositionColorShader)
+            RenderSystem.enableBlend()
+            RenderSystem.defaultBlendFunc()
+            photonTransBuf?.build()?.let { BufferUploader.drawWithShader(it) }
+            RenderSystem.blendFunc(GlStateManager.SourceFactor.SRC_ALPHA, GlStateManager.DestFactor.ONE)
+            photonAddBuf?.build()?.let { BufferUploader.drawWithShader(it) }
+            RenderSystem.defaultBlendFunc()
+            photonTransAlloc?.close()
+            photonAddAlloc?.close()
+        } else if (!useIrisPipeline && lineBuffer is BufferBuilder) {
+            lineBuffer.build()?.let { BufferUploader.drawWithShader(it) }
+        } else if (useIrisNonPhoton && consumers is MultiBufferSource.BufferSource) {
+            val transType = irisTranslucentType()
+            val addType = irisAdditiveType()
+            consumers.endBatch(transType)
+            if (addType !== transType) consumers.endBatch(addType)
+        }
+
+        // PASS 3: Depth Seal en Vanilla/Iris/Photon cuando el exterior negro esta activo para que la niebla/nubes/mundo no sobrescriban el negro
+        if (insideDarkRoomFactor >= 0.80f) {
+            RenderSystem.colorMask(false, false, false, false)
+            RenderSystem.depthMask(true)
+            RenderSystem.enableDepthTest()
+            RenderSystem.depthFunc(org.lwjgl.opengl.GL11.GL_LEQUAL)
+            RenderSystem.disableCull()
+            RenderSystem.setShader(GameRenderer::getPositionColorShader)
+            val sealBuf = tessellator.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR)
+            emitBlackShell { x0, y0, z0, x1, y1, z1, x2, y2, z2, x3, y3, z3 ->
+                sealBuf.addVertex(matrix, x0, y0, z0).setColor(0f, 0f, 0f, 1f)
+                sealBuf.addVertex(matrix, x1, y1, z1).setColor(0f, 0f, 0f, 1f)
+                sealBuf.addVertex(matrix, x2, y2, z2).setColor(0f, 0f, 0f, 1f)
+                sealBuf.addVertex(matrix, x3, y3, z3).setColor(0f, 0f, 0f, 1f)
+            }
+            sealBuf.build()?.let { BufferUploader.drawWithShader(it) }
+            RenderSystem.colorMask(true, true, true, true)
+        }
 
         RenderSystem.setShaderColor(1.0f, 1.0f, 1.0f, 1.0f)
         RenderSystem.disablePolygonOffset()
@@ -2060,6 +2712,9 @@ object ArenaZoneClient {
         RenderSystem.enableCull()
         RenderSystem.disableBlend()
 
+        activeUseIris = false
+        activeUsePhoton = false
+        activeIrisAlpha = 1.0f
         matrices.popPose()
     }
 }

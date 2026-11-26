@@ -5,6 +5,9 @@
   "compatibilityLevel": "JAVA_21",
   "client": [
     "ChatComponentMixin",
+    "DiscordChatButtonsMixin",
+    "DiscordChatPreviewPreMixin",
+    "DiscordChatPreviewPostMixin",
     "FontSetMixin",
     "ServerEmojiRenderOutputMixin"
   ],

@@ -912,8 +912,19 @@ class BadgesSettingsScreen(private val previousScreen: Screen?) : Screen(TextCat
 
 
         graphics.drawString(font, "GESTOR DE INSIGNIAS", left + 10, top + 9, 0xFFFFFFFF.toInt(), false)
-
-        graphics.drawString(font, TextCatalog.component("gui.subtitle"), left + 10, top + 21, 0xFF8A9A96.toInt(), false)
+        val subtitleComp = TextCatalog.component("gui.subtitle")
+        val maxSubWidth = (panelWidth - 20).coerceAtLeast(60)
+        val subWidth = font.width(subtitleComp)
+        if (subWidth > maxSubWidth) {
+            val scale = (maxSubWidth.toFloat() / subWidth.toFloat()).coerceIn(0.6f, 1.0f)
+            graphics.pose().pushPose()
+            graphics.pose().translate((left + 10).toFloat(), (top + 21).toFloat(), 0f)
+            graphics.pose().scale(scale, scale, 1f)
+            graphics.drawString(font, subtitleComp, 0, 0, 0xFF8A9A96.toInt(), false)
+            graphics.pose().popPose()
+        } else {
+            graphics.drawString(font, subtitleComp, left + 10, top + 21, 0xFF8A9A96.toInt(), false)
+        }
 
 
 

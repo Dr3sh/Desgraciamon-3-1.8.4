@@ -35,6 +35,36 @@ data class MirrorFadePayload(
     }
 }
 
+data class MirrorOriginsPayload(
+    val origins: Map<Int, String>
+) : CustomPacketPayload {
+    override fun type(): CustomPacketPayload.Type<MirrorOriginsPayload> = TYPE
+
+    companion object {
+        val ID: ResourceLocation = ResourceLocation.fromNamespaceAndPath(MirrorRules.MOD_ID, "memory_origins")
+        val TYPE = CustomPacketPayload.Type<MirrorOriginsPayload>(ID)
+        val CODEC: StreamCodec<FriendlyByteBuf, MirrorOriginsPayload> = StreamCodec.of(
+            { buf, payload ->
+                buf.writeVarInt(payload.origins.size)
+                for ((entityId, origin) in payload.origins) {
+                    buf.writeVarInt(entityId)
+                    buf.writeUtf(origin, 64)
+                }
+            },
+            { buf ->
+                val count = buf.readVarInt().coerceIn(0, 512)
+                val map = LinkedHashMap<Int, String>(count)
+                repeat(count) {
+                    val eid = buf.readVarInt()
+                    val origin = buf.readUtf(64)
+                    map[eid] = origin
+                }
+                MirrorOriginsPayload(map)
+            }
+        )
+    }
+}
+
 object MirrorPackets {
     private var registered = false
 
@@ -42,11 +72,19 @@ object MirrorPackets {
         if (registered) return
         registered = true
         PayloadTypeRegistry.playS2C().register(MirrorFadePayload.TYPE, MirrorFadePayload.CODEC)
+        PayloadTypeRegistry.playS2C().register(MirrorOriginsPayload.TYPE, MirrorOriginsPayload.CODEC)
     }
 
     fun send(player: ServerPlayer, fadeInMs: Int = 1800, holdMs: Int = 500, fadeOutMs: Int = 1800) {
         if (ServerPlayNetworking.canSend(player, MirrorFadePayload.TYPE)) {
             ServerPlayNetworking.send(player, MirrorFadePayload(fadeInMs, holdMs, fadeOutMs))
+        }
+    }
+
+    fun sendOrigins(player: ServerPlayer, origins: Map<Int, String>) {
+        if (origins.isEmpty()) return
+        if (ServerPlayNetworking.canSend(player, MirrorOriginsPayload.TYPE)) {
+            ServerPlayNetworking.send(player, MirrorOriginsPayload(origins))
         }
     }
 }

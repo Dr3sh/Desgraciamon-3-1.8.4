@@ -8,6 +8,8 @@ import net.minecraft.client.Minecraft
 import net.minecraft.network.chat.Component
 import java.io.BufferedInputStream
 import java.util.UUID
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
@@ -18,6 +20,7 @@ object ArenaMusicClient {
     private const val SAMPLE_RATE = 48_000
     private const val FRAME_SAMPLES = 960 // 20 ms at 48,000 Hz mono
     private const val FRAME_NS = 20_000_000L
+    private val EMPTY_FRAME = ShortArray(0)
 
     private val CHANNEL_UUID = UUID.nameUUIDFromBytes("showdown_arena:dome_music".toByteArray())
     private val STATIC_CHANNEL_UUID = UUID.nameUUIDFromBytes("showdown_arena:dome_music_static".toByteArray())
@@ -68,6 +71,16 @@ object ArenaMusicClient {
     val spectrumBands: FloatArray = FloatArray(8)
 
     private var workerThread: Thread? = null
+    private val workerGeneration = AtomicInteger(0)
+
+    @Volatile
+    private var predecodedTrackId: String? = null
+
+    @Volatile
+    private var predecodedFuture: CompletableFuture<ShortArray?>? = null
+
+    @Volatile
+    private var lastUsedStatic: Boolean? = null
 
     fun init() {
         ClientPlayNetworking.registerGlobalReceiver(ArenaPlaylistSyncPayload.ID) { payload, _ ->
@@ -201,7 +214,8 @@ object ArenaMusicClient {
     private fun ensureWorker() {
         if (running && workerThread?.isAlive == true) return
         running = true
-        val t = Thread({ audioLoop() }, "ArenaMusic-SVC-Player")
+        val gen = workerGeneration.incrementAndGet()
+        val t = Thread({ audioLoop(gen) }, "ArenaMusic-SVC-Player-$gen")
         t.isDaemon = true
         workerThread = t
         t.start()
@@ -210,7 +224,11 @@ object ArenaMusicClient {
     @Synchronized
     private fun stopWorker() {
         running = false
+        workerGeneration.incrementAndGet()
         workerThread?.interrupt()
+        workerThread = null
+        runCatching { staticChannel?.play(EMPTY_FRAME) }
+        runCatching { channel?.play(EMPTY_FRAME) }
     }
 
     fun reset() {
@@ -218,11 +236,14 @@ object ArenaMusicClient {
         currentSpatialGain = 0.0f
         wasInAudioRange = false
         lastAnnouncedTrackIdx = -1
+        lastUsedStatic = null
         bassLevel = 0.0f
         spectrumBands.fill(0.0f)
         stopWorker()
         channel = null
         staticChannel = null
+        predecodedTrackId = null
+        predecodedFuture = null
         playlistTracks = emptyList()
         totalPlaylistDurationMs = 0L
     }
@@ -276,135 +297,175 @@ object ArenaMusicClient {
         }
     }
 
-    private fun audioLoop() {
-        while (running && shouldPlay) {
-            val api = voicechatApi ?: break
-            val tracks = playlistTracks
-            if (tracks.isEmpty()) break
+    private fun takeOrDecodeTrack(api: VoicechatClientApi, trackId: String): ShortArray? {
+        val future = predecodedFuture
+        if (predecodedTrackId == trackId && future != null) {
+            predecodedTrackId = null
+            predecodedFuture = null
+            val cached = runCatching { future.get() }.getOrNull()
+            if (cached != null && cached.isNotEmpty()) return cached
+        }
+        return decodeTrackPcm(api, trackId)
+    }
 
-            val (trackIdx, trackPosMs) = computeSyncedPosition(serverTimeNowMs())
-            val track = tracks.getOrNull(trackIdx) ?: break
+    private fun schedulePredecode(api: VoicechatClientApi, nextTrackId: String) {
+        if (predecodedTrackId == nextTrackId && predecodedFuture != null) return
+        predecodedTrackId = nextTrackId
+        predecodedFuture = CompletableFuture.supplyAsync { decodeTrackPcm(api, nextTrackId) }
+    }
 
-            val pcm = decodeTrackPcm(api, track.trackId)
-            if (pcm == null || pcm.isEmpty()) {
-                try {
-                    Thread.sleep(1000L)
-                } catch (_: InterruptedException) {
-                    break
-                }
-                continue
-            }
+    private fun audioLoop(gen: Int) {
+        var forcedNextTrackIdx: Int? = null
+        try {
+            while (running && shouldPlay && workerGeneration.get() == gen) {
+                val api = voicechatApi ?: break
+                val tracks = playlistTracks
+                if (tracks.isEmpty()) break
 
-            var sampleIdx = ((trackPosMs * SAMPLE_RATE) / 1000L).toInt().coerceIn(0, (pcm.size - 1).coerceAtLeast(0))
-            var nextFrameNs = System.nanoTime()
-            var frameCount = 0
-
-            while (running && shouldPlay && sampleIdx < pcm.size) {
-                if (Minecraft.getInstance().level == null) break
-                // Resync check if clock drifted > 2.5s
-                val (expectedIdx, expectedPosMs) = computeSyncedPosition(serverTimeNowMs())
-                if (expectedIdx != trackIdx && expectedPosMs > 2000L) {
-                    break
-                }
-                if (expectedIdx == trackIdx) {
-                    val actualPosMs = (sampleIdx * 1000L) / SAMPLE_RATE
-                    if (kotlin.math.abs(expectedPosMs - actualPosMs) > 2500L) {
-                        sampleIdx = ((expectedPosMs * SAMPLE_RATE) / 1000L).toInt().coerceIn(0, (pcm.size - 1).coerceAtLeast(0))
-                    }
-                }
-
-                // Micro fade-in over first 40 frames (0.8s) to avoid click on entry
-                val fadeInMul = if (frameCount < 40) (frameCount + 1) / 40.0f else 1.0f
-                val gain = BASE_GAIN * fadeInMul * currentSpatialGain
-
-                val frame = ShortArray(FRAME_SAMPLES)
-                val remaining = pcm.size - sampleIdx
-                val toCopy = minOf(FRAME_SAMPLES, remaining)
-
-                var lpBass = 0.0f
-                var lpLowMid = 0.0f
-                var lpMid = 0.0f
-                var sumBass = 0.0f
-                var sumLowMid = 0.0f
-                var sumMid = 0.0f
-                var sumHigh = 0.0f
-
-                for (i in 0 until toCopy) {
-                    val rawSample = pcm[sampleIdx + i]
-                    val x = rawSample / 32768.0f
-                    lpBass += 0.032f * (x - lpBass)
-                    lpLowMid += 0.105f * (x - lpLowMid)
-                    lpMid += 0.30f * (x - lpMid)
-                    val lowMid = lpLowMid - lpBass
-                    val mid = lpMid - lpLowMid
-                    val high = x - lpMid
-                    sumBass += lpBass * lpBass
-                    sumLowMid += lowMid * lowMid
-                    sumMid += mid * mid
-                    sumHigh += high * high
-
-                    val scaled = (rawSample * gain).roundToInt()
-                        .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
-                    frame[i] = scaled.toShort()
-                }
-                sampleIdx += toCopy
-
-                if (toCopy > 0 && currentSpatialGain > 0.01f) {
-                    val invN = 1.0f / toCopy
-                    val rmsBass = kotlin.math.sqrt(sumBass * invN) * 4.2f
-                    val rmsLowMid = kotlin.math.sqrt(sumLowMid * invN) * 4.8f
-                    val rmsMid = kotlin.math.sqrt(sumMid * invN) * 5.2f
-                    val rmsHigh = kotlin.math.sqrt(sumHigh * invN) * 6.0f
-                    val targets = floatArrayOf(
-                        rmsBass.coerceIn(0f, 1f),
-                        ((rmsBass * 0.65f + rmsLowMid * 0.35f)).coerceIn(0f, 1f),
-                        rmsLowMid.coerceIn(0f, 1f),
-                        ((rmsLowMid * 0.55f + rmsMid * 0.45f)).coerceIn(0f, 1f),
-                        rmsMid.coerceIn(0f, 1f),
-                        ((rmsMid * 0.55f + rmsHigh * 0.45f)).coerceIn(0f, 1f),
-                        rmsHigh.coerceIn(0f, 1f),
-                        ((rmsBass * 0.4f + rmsHigh * 0.6f)).coerceIn(0f, 1f)
-                    )
-                    for (b in 0 until 8) {
-                        val prev = spectrumBands[b]
-                        val tVal = targets[b]
-                        val coeff = if (tVal > prev) 0.65f else 0.22f
-                        spectrumBands[b] = prev + (tVal - prev) * coeff
-                    }
-                    val targetBass = (rmsBass * rmsBass * 1.15f).coerceIn(0f, 1f)
-                    val bassCoeff = if (targetBass > bassLevel) 0.72f else 0.20f
-                    bassLevel += (targetBass - bassLevel) * bassCoeff
+                val (syncedIdx, syncedPosMs) = computeSyncedPosition(serverTimeNowMs())
+                val trackIdx = if (forcedNextTrackIdx != null) {
+                    val idx = forcedNextTrackIdx!!.mod(tracks.size)
+                    forcedNextTrackIdx = null
+                    idx
                 } else {
-                    for (b in 0 until 8) spectrumBands[b] *= 0.80f
-                    bassLevel *= 0.80f
+                    syncedIdx
                 }
+                val trackPosMs = if (trackIdx == syncedIdx) syncedPosMs else 0L
+                val track = tracks.getOrNull(trackIdx) ?: break
 
-                if (voicechatConnected) {
-                    if (useStaticChannel) {
-                        staticChannel?.play(frame)
-                    } else {
-                        channel?.play(frame)
-                    }
-                }
-
-                frameCount++
-                nextFrameNs += FRAME_NS
-                val sleepNs = nextFrameNs - System.nanoTime()
-                if (sleepNs > 0L) {
-                    val ms = sleepNs / 1_000_000L
-                    val ns = (sleepNs % 1_000_000L).toInt()
+                val pcm = takeOrDecodeTrack(api, track.trackId)
+                if (pcm == null || pcm.isEmpty()) {
+                    forcedNextTrackIdx = (trackIdx + 1) % tracks.size
                     try {
-                        Thread.sleep(ms, ns)
+                        Thread.sleep(250L)
                     } catch (_: InterruptedException) {
                         break
                     }
-                } else if (sleepNs < -200_000_000L) {
-                    nextFrameNs = System.nanoTime()
+                    continue
+                }
+
+                // Pre-decode the next track asynchronously so track transitions are gapless
+                val nextIdx = (trackIdx + 1) % tracks.size
+                schedulePredecode(api, tracks[nextIdx].trackId)
+
+                var sampleIdx = ((trackPosMs * SAMPLE_RATE) / 1000L).toInt().coerceIn(0, (pcm.size - 1).coerceAtLeast(0))
+                var nextFrameNs = System.nanoTime()
+                var frameCount = 0
+
+                while (running && shouldPlay && workerGeneration.get() == gen && sampleIdx < pcm.size) {
+                    if (Minecraft.getInstance().level == null) break
+                    // Resync only if we are far off (> 4s) and not near the very end of the track
+                    val (expectedIdx, expectedPosMs) = computeSyncedPosition(serverTimeNowMs())
+                    if (expectedIdx != trackIdx && expectedPosMs > 3000L && frameCount > 150) {
+                        break
+                    }
+
+                    // Micro fade-in over first 40 frames (0.8s) to avoid click on entry
+                    val fadeInMul = if (frameCount < 40) (frameCount + 1) / 40.0f else 1.0f
+                    val gain = BASE_GAIN * fadeInMul * currentSpatialGain
+
+                    val frame = ShortArray(FRAME_SAMPLES)
+                    val remaining = pcm.size - sampleIdx
+                    val toCopy = minOf(FRAME_SAMPLES, remaining)
+
+                    var lpBass = 0.0f
+                    var lpLowMid = 0.0f
+                    var lpMid = 0.0f
+                    var sumBass = 0.0f
+                    var sumLowMid = 0.0f
+                    var sumMid = 0.0f
+                    var sumHigh = 0.0f
+
+                    for (i in 0 until toCopy) {
+                        val rawSample = pcm[sampleIdx + i]
+                        val x = rawSample / 32768.0f
+                        lpBass += 0.032f * (x - lpBass)
+                        lpLowMid += 0.105f * (x - lpLowMid)
+                        lpMid += 0.30f * (x - lpMid)
+                        val lowMid = lpLowMid - lpBass
+                        val mid = lpMid - lpLowMid
+                        val high = x - lpMid
+                        sumBass += lpBass * lpBass
+                        sumLowMid += lowMid * lowMid
+                        sumMid += mid * mid
+                        sumHigh += high * high
+
+                        val scaled = (rawSample * gain).roundToInt()
+                            .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+                        frame[i] = scaled.toShort()
+                    }
+                    sampleIdx += toCopy
+
+                    if (toCopy > 0 && currentSpatialGain > 0.01f) {
+                        val invN = 1.0f / toCopy
+                        val rmsBass = kotlin.math.sqrt(sumBass * invN) * 4.2f
+                        val rmsLowMid = kotlin.math.sqrt(sumLowMid * invN) * 4.8f
+                        val rmsMid = kotlin.math.sqrt(sumMid * invN) * 5.2f
+                        val rmsHigh = kotlin.math.sqrt(sumHigh * invN) * 6.0f
+                        val targets = floatArrayOf(
+                            rmsBass.coerceIn(0f, 1f),
+                            ((rmsBass * 0.65f + rmsLowMid * 0.35f)).coerceIn(0f, 1f),
+                            rmsLowMid.coerceIn(0f, 1f),
+                            ((rmsLowMid * 0.55f + rmsMid * 0.45f)).coerceIn(0f, 1f),
+                            rmsMid.coerceIn(0f, 1f),
+                            ((rmsMid * 0.55f + rmsHigh * 0.45f)).coerceIn(0f, 1f),
+                            rmsHigh.coerceIn(0f, 1f),
+                            ((rmsBass * 0.4f + rmsHigh * 0.6f)).coerceIn(0f, 1f)
+                        )
+                        for (b in 0 until 8) {
+                            val prev = spectrumBands[b]
+                            val tVal = targets[b]
+                            val coeff = if (tVal > prev) 0.65f else 0.22f
+                            spectrumBands[b] = prev + (tVal - prev) * coeff
+                        }
+                        val targetBass = (rmsBass * rmsBass * 1.15f).coerceIn(0f, 1f)
+                        val bassCoeff = if (targetBass > bassLevel) 0.72f else 0.20f
+                        bassLevel += (targetBass - bassLevel) * bassCoeff
+                    } else {
+                        for (b in 0 until 8) spectrumBands[b] *= 0.80f
+                        bassLevel *= 0.80f
+                    }
+
+                    if (voicechatConnected) {
+                        val wantStatic = useStaticChannel
+                        val prevStatic = lastUsedStatic
+                        if (prevStatic != null && prevStatic != wantStatic) {
+                            if (prevStatic) runCatching { staticChannel?.play(EMPTY_FRAME) } else runCatching { channel?.play(EMPTY_FRAME) }
+                        }
+                        lastUsedStatic = wantStatic
+                        if (wantStatic) {
+                            staticChannel?.play(frame)
+                        } else {
+                            channel?.play(frame)
+                        }
+                    }
+
+                    frameCount++
+                    nextFrameNs += FRAME_NS
+                    val sleepNs = nextFrameNs - System.nanoTime()
+                    if (sleepNs > 0L) {
+                        val ms = sleepNs / 1_000_000L
+                        val ns = (sleepNs % 1_000_000L).toInt()
+                        try {
+                            Thread.sleep(ms, ns)
+                        } catch (_: InterruptedException) {
+                            break
+                        }
+                    } else if (sleepNs < -200_000_000L) {
+                        nextFrameNs = System.nanoTime()
+                    }
+                }
+
+                // If the track finished naturally at end of PCM, loop seamlessly to the next track
+                if (running && shouldPlay && workerGeneration.get() == gen && sampleIdx >= pcm.size) {
+                    forcedNextTrackIdx = nextIdx
                 }
             }
+        } finally {
+            if (workerGeneration.get() == gen) {
+                running = false
+            }
         }
-
-        running = false
     }
 
     private data class Quad(val x: Double, val y: Double, val z: Double, val dist: Double)

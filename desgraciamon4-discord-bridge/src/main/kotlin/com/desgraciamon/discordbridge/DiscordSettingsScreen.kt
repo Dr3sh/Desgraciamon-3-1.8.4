@@ -75,7 +75,7 @@ class DiscordSettingsScreen(private val previousScreen: Screen?) : Screen(TextCa
                 else "PUBLICO"
             },
             disabledReason = {
-                if (!DiscordSettingsClientData.isDiscordLinked) "Tu perfil de juego debe estar vinculado con discord (/vincular)"
+                if (!DiscordSettingsClientData.isDiscordLinked) "Tu perfil de juego debe estar vinculado con discord (/cuenta vincular)"
                 else null
             },
             onToggle = {

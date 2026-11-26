@@ -1,10 +1,16 @@
 package com.desgraciamon.showdownarena
 
+import com.cobblemon.mod.common.api.Priority
+import com.cobblemon.mod.common.api.events.CobblemonEvents
+import com.cobblemon.mod.common.entity.pokemon.PokemonEntity
 import net.fabricmc.api.ModInitializer
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerEntityEvents
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents
+import net.minecraft.network.chat.Component
+import net.minecraft.network.chat.TextColor
 
 class ShowdownArenaMod : ModInitializer {
     override fun onInitialize() {
@@ -43,6 +49,54 @@ class ShowdownArenaMod : ModInitializer {
         ProtectedZoneManager.init()
         SkyLogoManager.init()
         GtsZoneManager.init()
+        ShowdownBattlePartySync.register()
+
+        // Evitar "R para combatir", ataques o capturas sobre Pokémon temporales generados por Showdown
+        ServerEntityEvents.ENTITY_LOAD.register { entity, _ ->
+            if (entity is PokemonEntity && entity.pokemon.persistentData.getBoolean(ArenaTeamFactory.SHOWDOWN_TEMP_NBT_KEY)) {
+                entity.entityData.set(PokemonEntity.UNBATTLEABLE, true)
+                entity.isInvulnerable = true
+            }
+        }
+        CobblemonEvents.POKEMON_ENTITY_SPAWN.subscribe(Priority.HIGHEST) { event ->
+            val entity = event.entity
+            if (entity.pokemon.persistentData.getBoolean(ArenaTeamFactory.SHOWDOWN_TEMP_NBT_KEY)) {
+                entity.entityData.set(PokemonEntity.UNBATTLEABLE, true)
+                entity.isInvulnerable = true
+            } else if (ArenaZoneManager.config.enabled) {
+                val zone = ArenaZoneManager.config.zone
+                if (zone != null && zone.contains(entity) && ArenaZoneManager.isCommonWildPokemon(entity)) {
+                    event.cancel()
+                }
+            }
+        }
+        CobblemonEvents.THROWN_POKEBALL_HIT.subscribe(Priority.HIGHEST) { event ->
+            if (event.pokemon.pokemon.persistentData.getBoolean(ArenaTeamFactory.SHOWDOWN_TEMP_NBT_KEY)) {
+                event.cancel()
+            }
+        }
+        CobblemonEvents.BATTLE_STARTED_PRE.subscribe(Priority.HIGHEST) { event ->
+            if (event.battle.isPvW && event.battle.actors.any { actor ->
+                    actor.pokemonList.any { it.originalPokemon.persistentData.getBoolean(ArenaTeamFactory.SHOWDOWN_TEMP_NBT_KEY) }
+                }) {
+                event.cancel()
+            }
+        }
+        CobblemonEvents.BATTLE_VICTORY.subscribe(Priority.NORMAL) { event ->
+            val meta = ShowdownArenaCommands.getBattleMeta(event.battle.battleId) ?: return@subscribe
+            if (!meta.isPvp || meta.announced) return@subscribe
+            meta.announced = true
+
+            val winners = event.winners.joinToString(", ") { it.getName().string }.ifBlank { return@subscribe }
+            val losers = event.losers.joinToString(", ") { it.getName().string }.ifBlank { return@subscribe }
+            val server = event.battle.players.firstOrNull()?.server ?: return@subscribe
+
+            val arenaColor = TextColor.fromRgb(0xFCA103)
+            val msg = Component.empty()
+                .append(Component.literal("ARENA").withStyle { it.withColor(arenaColor).withBold(true) })
+                .append(Component.literal(" $winners venció a $losers en un combate de ${meta.formatLabel}").withStyle { it.withColor(arenaColor).withBold(false) })
+            server.playerList.broadcastSystemMessage(msg, false)
+        }
 
         ServerLifecycleEvents.SERVER_STARTING.register { server ->
             ArenaZoneManager.onServerStart(server)
@@ -69,8 +123,9 @@ class ShowdownArenaMod : ModInitializer {
         }
         ServerTickEvents.END_SERVER_TICK.register(ShowdownArenaCommands::tickTestBattles)
         ServerTickEvents.END_SERVER_TICK.register(ArenaLightsManager::tick)
+        ServerTickEvents.END_SERVER_TICK.register(ArenaZoneManager::tickWildCleanup)
         ServerPlayConnectionEvents.DISCONNECT.register { handler, _ ->
-            ShowdownArenaCommands.removeTestBattle(handler.player.uuid)
+            ShowdownArenaCommands.onPlayerDisconnect(handler.player)
         }
         ServerLifecycleEvents.SERVER_STOPPING.register {
             ArenaZoneManager.onServerStop()

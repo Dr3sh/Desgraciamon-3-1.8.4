@@ -19,8 +19,6 @@ public final class GuildSynergyHudHelper {
       Minecraft mc = Minecraft.getInstance();
       if (mc.player == null || mc.gameMode == null || !mc.gameMode.hasExperience()) {
          return false;
-      } else if (mc.player.jumpableVehicle() != null) {
-         return false;
       } else if (GuildClientState.synergyNearbyCount < 1) {
          return false;
       } else {

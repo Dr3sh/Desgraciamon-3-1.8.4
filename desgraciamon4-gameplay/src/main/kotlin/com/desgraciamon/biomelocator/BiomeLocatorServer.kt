@@ -357,11 +357,12 @@ object BiomeLocatorServer {
     }
 
     private fun cleanEnglishBiomeName(raw: String): String {
-        val path = raw.trim().lowercase().replace(' ', '_')
+        val segment = raw.trim().substringAfterLast('/')
+        val path = segment.lowercase().replace(' ', '_')
         if (path == "the_end") return "The End"
         if (path == "the_void") return "The Void"
         val words = path.split('_').filter { it.isNotBlank() }
-        if (words.isEmpty()) return raw
+        if (words.isEmpty()) return segment
         return words.joinToString(" ") { word ->
             when (word) {
                 "of", "in", "and" -> word
@@ -378,14 +379,36 @@ object BiomeLocatorServer {
                 syncToPlayer(player)
             }
             "GET_SPAWNS" -> {
-                CobblemonSpawnIntegration.ensureIndexed(player.server)
-                val list = CobblemonSpawnIntegration.getSpawnsForBiome(player.server, biomeId)
-                ServerPlayNetworking.send(player, BiomeLocatorPackets.S2CBiomeSpawnsPayload(biomeId, list))
+                if (CobblemonSpawnIntegration.isReady()) {
+                    val list = CobblemonSpawnIntegration.getSpawnsForBiome(player.server, biomeId)
+                    ServerPlayNetworking.send(player, BiomeLocatorPackets.S2CBiomeSpawnsPayload(biomeId, list))
+                } else {
+                    getSearchExecutor().submit {
+                        CobblemonSpawnIntegration.ensureIndexed(player.server)
+                        val list = CobblemonSpawnIntegration.getSpawnsForBiome(player.server, biomeId)
+                        player.server.execute {
+                            if (!player.hasDisconnected()) {
+                                ServerPlayNetworking.send(player, BiomeLocatorPackets.S2CBiomeSpawnsPayload(biomeId, list))
+                            }
+                        }
+                    }
+                }
             }
             "SEARCH_POKEMON" -> {
-                CobblemonSpawnIntegration.ensureIndexed(player.server)
-                val result = CobblemonSpawnIntegration.searchPokemonBiomes(player.server, biomeId)
-                ServerPlayNetworking.send(player, BiomeLocatorPackets.S2CPokemonBiomesPayload(biomeId, result.first, result.second))
+                if (CobblemonSpawnIntegration.isReady()) {
+                    val result = CobblemonSpawnIntegration.searchPokemonBiomes(player.server, biomeId)
+                    ServerPlayNetworking.send(player, BiomeLocatorPackets.S2CPokemonBiomesPayload(biomeId, result.first, result.second))
+                } else {
+                    getSearchExecutor().submit {
+                        CobblemonSpawnIntegration.ensureIndexed(player.server)
+                        val result = CobblemonSpawnIntegration.searchPokemonBiomes(player.server, biomeId)
+                        player.server.execute {
+                            if (!player.hasDisconnected()) {
+                                ServerPlayNetworking.send(player, BiomeLocatorPackets.S2CPokemonBiomesPayload(biomeId, result.first, result.second))
+                            }
+                        }
+                    }
+                }
             }
             "UNLOCK" -> {
                 if (data.tokens > 0 && !data.unlockedBiomes.contains(biomeId)) {
@@ -722,7 +745,13 @@ object BiomeLocatorServer {
         return if (bestDistSq != Long.MAX_VALUE) BlockPos(bestX, bestY, bestZ) else null
     }
 
+    private var refreshCheckCounter = 0
+
     fun tick(server: MinecraftServer) {
+        if (++refreshCheckCounter >= 1200) {
+            refreshCheckCounter = 0
+            CobblemonSpawnIntegration.checkScheduledRefresh(server)
+        }
         for (player in server.playerList.players) {
             val data = getData(player)
             val targetBiome = data.activeTrackedBiome ?: continue

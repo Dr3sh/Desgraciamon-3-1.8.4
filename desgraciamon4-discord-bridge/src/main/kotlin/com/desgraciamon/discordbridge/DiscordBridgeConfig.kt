@@ -7,8 +7,19 @@ data class DiscordBridgeConfig(
     var botToken: String = "",
     var guildId: String = "",
     var skinChannelId: String = "",
-    var hitosRoleId: String = ""
+    var hitosRoleId: String = "",
+    var adminUserIds: String = ""
 ) {
+    fun isAdminUser(userId: String?): Boolean {
+        if (userId.isNullOrBlank()) return false
+        val configured = adminUserIds.split(',').map { it.trim() }.filter { it.isNotEmpty() }
+        return configured.contains(userId.trim())
+    }
+
+    fun hasConfiguredAdminUsers(): Boolean {
+        return adminUserIds.split(',').any { it.trim().isNotEmpty() }
+    }
+
     fun save() {
         runCatching {
             file.parentFile?.mkdirs()
@@ -20,6 +31,7 @@ data class DiscordBridgeConfig(
             properties.setProperty("guildId", guildId)
             properties.setProperty("skinChannelId", skinChannelId)
             properties.setProperty("hitosRoleId", hitosRoleId)
+            properties.setProperty("adminUserIds", adminUserIds)
             file.outputStream().use { properties.store(it, "Desgraciamon 4 Discord Bridge Configuration") }
         }.onFailure {
             DiscordBridgeMod.logger.error("Could not save Discord Bridge config", it)
@@ -32,7 +44,7 @@ data class DiscordBridgeConfig(
         fun load(): DiscordBridgeConfig {
             if (!file.exists()) {
                 file.parentFile?.mkdirs()
-                file.writeText("# Keep the bot token private. Restart the server after changing this file.\nbotToken=\nguildId=\nskinChannelId=\nhitosRoleId=\n")
+                file.writeText("# Keep the bot token private. Restart the server after changing this file.\nbotToken=\nguildId=\nskinChannelId=\nhitosRoleId=\nadminUserIds=\n")
                 return DiscordBridgeConfig()
             }
             return runCatching {
@@ -41,7 +53,8 @@ data class DiscordBridgeConfig(
                     botToken = properties.getProperty("botToken", "").trim(),
                     guildId = properties.getProperty("guildId", "").trim(),
                     skinChannelId = properties.getProperty("skinChannelId", "").trim(),
-                    hitosRoleId = properties.getProperty("hitosRoleId", "").trim()
+                    hitosRoleId = properties.getProperty("hitosRoleId", "").trim(),
+                    adminUserIds = properties.getProperty("adminUserIds", "").trim()
                 )
             }.getOrElse {
                 DiscordBridgeMod.logger.error("Could not read Discord Bridge config", it)

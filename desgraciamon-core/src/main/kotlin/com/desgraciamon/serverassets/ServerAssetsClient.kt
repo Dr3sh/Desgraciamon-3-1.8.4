@@ -271,6 +271,7 @@ object ServerAssetsClientState {
     @JvmStatic
     fun processEmojis(component: Component): Component {
         if (emojiNameToCodepoint.isEmpty()) return component
+        if (!EMOJI_TOKEN_REGEX.containsMatchIn(component.string)) return component
         return transformComponent(component)
     }
 

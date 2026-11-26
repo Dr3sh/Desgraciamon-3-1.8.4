@@ -41,6 +41,7 @@ public class VoiceChatScreen extends VoiceChatScreenBase {
 
     private ToggleImageButton mute;
     private ToggleImageButton disable;
+    private Button group;
     private HoverArea recordingHoverArea;
 
     private ClientPlayerStateManager stateManager;
@@ -88,7 +89,7 @@ public class VoiceChatScreen extends VoiceChatScreenBase {
         }).bounds(guiLeft + 6, guiTop + 6 + 15, 75, 20).build();
         addRenderableWidget(settings);
 
-        Button group = Button.builder(GROUP, button -> {
+        group = Button.builder(GROUP, button -> {
             ClientGroup g = stateManager.getGroup();
             if (g != null) {
                 minecraft.setScreen(new GroupScreen(g));
@@ -98,7 +99,6 @@ public class VoiceChatScreen extends VoiceChatScreenBase {
         }).bounds(guiLeft + xSize - 6 - 75 + 1, guiTop + 6 + 15, 75, 20).build();
         addRenderableWidget(group);
 
-        group.active = client != null && client.getConnection() != null && client.getConnection().getData().groupsEnabled();
         recordingHoverArea = new HoverArea(6 + 20 + 2 + 20 + 2 + 20 + 2, ySize - 6 - 20, xSize - ((6 + 20 + 2 + 20 + 2) * 2 + 20 + 2), 20);
 
         checkButtons();
@@ -111,8 +111,12 @@ public class VoiceChatScreen extends VoiceChatScreenBase {
     }
 
     private void checkButtons() {
+        @Nullable ClientVoicechat client = ClientManager.getClient();
         mute.active = MuteTooltipSupplier.canMuteMic();
         disable.active = stateManager.canEnable();
+        if (group != null) {
+            group.active = client != null && client.getConnection() != null && client.getConnection().getData().groupsEnabled();
+        }
     }
 
     private void toggleRecording() {

@@ -12,12 +12,14 @@ import com.cobblemon.mod.common.entity.npc.NPCEntity
 import com.cobblemon.mod.common.pokemon.Gender
 import com.cobblemon.mod.common.pokemon.Pokemon
 import com.cobblemon.mod.common.pokemon.Species
+import com.cobblemon.mod.common.pokemon.properties.UncatchableProperty
 import net.minecraft.core.registries.BuiltInRegistries
 import net.minecraft.resources.ResourceLocation
 import java.util.UUID
 import java.util.concurrent.ThreadLocalRandom
 
 object ArenaTeamFactory {
+    const val SHOWDOWN_TEMP_NBT_KEY = "showdown_arena_temp"
 
     private val COMPETITIVE_ITEMS = listOf(
         "leftovers", "life_orb", "choice_band", "choice_specs", "choice_scarf",
@@ -99,6 +101,8 @@ object ArenaTeamFactory {
         val party = PartyStore(UUID.randomUUID())
         pokemonList.forEachIndexed { slot, pkm ->
             pkm.heal()
+            UncatchableProperty.uncatchable().apply(pkm)
+            pkm.persistentData.putBoolean(SHOWDOWN_TEMP_NBT_KEY, true)
             party.set(slot, pkm)
         }
         return party
@@ -118,6 +122,8 @@ object ArenaTeamFactory {
         val party = NPCPartyStore(npc)
         pokemonList.forEachIndexed { slot, pkm ->
             pkm.heal()
+            UncatchableProperty.uncatchable().apply(pkm)
+            pkm.persistentData.putBoolean(SHOWDOWN_TEMP_NBT_KEY, true)
             party.set(slot, pkm)
         }
         return party

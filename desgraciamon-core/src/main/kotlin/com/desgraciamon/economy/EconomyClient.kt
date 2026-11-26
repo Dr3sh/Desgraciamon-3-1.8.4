@@ -22,7 +22,8 @@ class EconomyClient : ClientModInitializer {
                 }
                 MarketStore.state.trendingItems.clear()
                 MarketStore.state.trendingItems.addAll(payload.trendingItems)
-                MarketStore.state.lastResetTimestampMs = payload.nextResetTimestampMs - (MarketStore.config.resetIntervalHours * 3600000L)
+                MarketEngine.clientSyncedNextResetMs = payload.nextResetTimestampMs
+                MarketStore.state.lastResetTimestampMs = payload.nextResetTimestampMs - (MarketEngine.getResetIntervalDays() * 86400000L)
             }
         }
 
@@ -33,6 +34,7 @@ class EconomyClient : ClientModInitializer {
             }
         }
         ClientPlayConnectionEvents.DISCONNECT.register { _, _ ->
+            MarketEngine.clientSyncedNextResetMs = 0L
             MarketStore.config.items.clear()
             MarketStore.resetState()
         }

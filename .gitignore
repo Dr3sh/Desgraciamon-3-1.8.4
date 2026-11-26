@@ -11,9 +11,9 @@ node_modules/
 **/node_modules/
 
 # Compiled outputs
-mods/
 dist/
 *.jar
+!mods/*.jar
 !gradle/wrapper/gradle-wrapper.jar
 !**/gradle/wrapper/gradle-wrapper.jar
 
@@ -32,3 +32,11 @@ run/
 crash-reports/
 *.log
 hs_err_pid*.log
+
+# Legacy decompiled reference folders
+guilds-1.0.1-src/
+guilds-mojmap-src/
+
+# Root promotional / Discord images
+/*.webp
+/discord_bot_avatar.png

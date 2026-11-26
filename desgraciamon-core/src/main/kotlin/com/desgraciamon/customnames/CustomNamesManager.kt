@@ -23,6 +23,7 @@ object CustomNamesManager {
     private val namesByUuid = ConcurrentHashMap<UUID, String>()
     private val namesByUsername = ConcurrentHashMap<String, String>()
     private val usernameByUuid = ConcurrentHashMap<UUID, String>()
+    private val tabColorsByUuid = ConcurrentHashMap<UUID, String>()
 
     private var storageFile: File? = null
     var currentServer: MinecraftServer? = null
@@ -83,6 +84,7 @@ object CustomNamesManager {
         namesByUuid.clear()
         namesByUsername.clear()
         usernameByUuid.clear()
+        tabColorsByUuid.clear()
 
         if (!file.exists()) {
             createTemplateFile(file)
@@ -96,6 +98,15 @@ object CustomNamesManager {
             val root = jsonElement.asJsonObject
 
             for ((key, elem) in root.entrySet()) {
+                if (key == "_tabColors" && elem.isJsonObject) {
+                    for ((uuidStr, colorElem) in elem.asJsonObject.entrySet()) {
+                        val uuid = runCatching { UUID.fromString(uuidStr) }.getOrNull() ?: continue
+                        if (colorElem.isJsonPrimitive && colorElem.asJsonPrimitive.isString) {
+                            tabColorsByUuid[uuid] = colorElem.asString
+                        }
+                    }
+                    continue
+                }
                 if (key.startsWith("_")) continue
 
                 var nickname: String? = null
@@ -189,6 +200,15 @@ object CustomNamesManager {
                 }
             }
 
+            // Guardar colores personalizados de tablist
+            if (tabColorsByUuid.isNotEmpty()) {
+                val colorsObj = JsonObject()
+                for ((uuid, hex) in tabColorsByUuid) {
+                    colorsObj.addProperty(uuid.toString(), hex)
+                }
+                root.add("_tabColors", colorsObj)
+            }
+
             val tempFile = java.io.File(file.parentFile, "customnames.json.tmp")
             tempFile.writeText(gson.toJson(root), StandardCharsets.UTF_8)
             java.nio.file.Files.move(tempFile.toPath(), file.toPath(), java.nio.file.StandardCopyOption.ATOMIC_MOVE, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
@@ -222,6 +242,41 @@ object CustomNamesManager {
     fun getPlain(uuid: UUID): String? {
         val raw = getRaw(uuid) ?: return null
         return raw.replace(Regex("<[^>]*>"), "")
+    }
+
+    fun getTabColor(uuid: UUID): String? = tabColorsByUuid[uuid]
+
+    fun setTabColor(uuid: UUID, hex: String) {
+        val normalized = if (hex.startsWith("#")) hex.uppercase() else "#${hex.uppercase()}"
+        tabColorsByUuid[uuid] = normalized
+        save()
+        currentServer?.let { server ->
+            val player = server.playerList.getPlayer(uuid)
+            if (player != null) {
+                server.playerList.broadcastAll(
+                    ClientboundPlayerInfoUpdatePacket(
+                        ClientboundPlayerInfoUpdatePacket.Action.UPDATE_DISPLAY_NAME,
+                        player
+                    )
+                )
+            }
+        }
+    }
+
+    fun clearTabColor(uuid: UUID) {
+        tabColorsByUuid.remove(uuid)
+        save()
+        currentServer?.let { server ->
+            val player = server.playerList.getPlayer(uuid)
+            if (player != null) {
+                server.playerList.broadcastAll(
+                    ClientboundPlayerInfoUpdatePacket(
+                        ClientboundPlayerInfoUpdatePacket.Action.UPDATE_DISPLAY_NAME,
+                        player
+                    )
+                )
+            }
+        }
     }
 
     fun getUsername(uuid: UUID): String? {
@@ -321,19 +376,22 @@ object CustomNamesManager {
     }
 
     fun syncToAll(server: MinecraftServer) {
+        // Dedicated servers invoke SERVER_STARTING before PlayerManager is initialized.
+        val playerList = server.playerList ?: return
+        val players = playerList.players
+        if (players.isEmpty()) return
+
         val payload = CustomNamesSyncPayload(getAllNames())
-        for (p in server.playerList.players) {
+        for (p in players) {
             if (ServerPlayNetworking.canSend(p, CustomNamesSyncPayload.TYPE)) {
                 ServerPlayNetworking.send(p, payload)
             }
         }
-        if (server.playerList.players.isNotEmpty()) {
-            server.playerList.broadcastAll(
-                ClientboundPlayerInfoUpdatePacket(
-                    EnumSet.of(ClientboundPlayerInfoUpdatePacket.Action.UPDATE_DISPLAY_NAME),
-                    server.playerList.players
-                )
+        playerList.broadcastAll(
+            ClientboundPlayerInfoUpdatePacket(
+                EnumSet.of(ClientboundPlayerInfoUpdatePacket.Action.UPDATE_DISPLAY_NAME),
+                players
             )
-        }
+        )
     }
 }

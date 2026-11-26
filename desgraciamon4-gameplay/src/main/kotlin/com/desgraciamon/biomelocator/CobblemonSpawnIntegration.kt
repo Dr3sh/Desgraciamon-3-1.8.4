@@ -4,14 +4,40 @@ import com.cobblemon.mod.common.api.pokemon.PokemonSpecies
 import com.cobblemon.mod.common.api.spawning.CobblemonSpawnPools
 import com.cobblemon.mod.common.api.spawning.detail.PokemonSpawnDetail
 import com.cobblemon.mod.common.api.spawning.detail.SpawnDetail
+import com.google.gson.GsonBuilder
+import net.fabricmc.loader.api.FabricLoader
 import net.minecraft.core.Holder
 import net.minecraft.core.registries.Registries
 import net.minecraft.resources.ResourceLocation
 import net.minecraft.server.MinecraftServer
 import net.minecraft.world.level.biome.Biome
+import java.io.File
+import java.time.ZoneId
+import java.time.ZonedDateTime
+import java.time.format.DateTimeFormatter
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 
 object CobblemonSpawnIntegration {
+    private val VE_ZONE: ZoneId = ZoneId.of("America/Caracas")
+    private val GSON = GsonBuilder().create()
+    private val CACHE_FILE = File("config/desgraciamon4_biome_locator/spawn_cache.json")
+    private val refreshInFlight = AtomicBoolean(false)
+
+    @Volatile
+    private var lastCheckedBucket: Long = -1L
+
+    @Volatile
+    private var lastModsFingerprint: String = ""
+
+    data class DiskSpawnCache(
+        val version: Int = 1,
+        val modsFingerprint: String = "",
+        val lastCheckBucket: Long = -1L,
+        val checkedAtVe: String = "",
+        val biomes: Map<String, List<BiomePokemonSpawnEntry>> = emptyMap()
+    )
 
     data class BiomePokemonSpawnEntry(
         val speciesId: String,          // e.g. "cobblemon:pikachu"
@@ -47,26 +73,159 @@ object CobblemonSpawnIntegration {
 
     // Cache indexed by lowercase Pokemon name & species ID -> Set of biome IDs
     private val pokemonToBiomesMap = ConcurrentHashMap<String, MutableSet<String>>()
+    @Volatile
     private var isIndexed = false
+
+    fun isReady(): Boolean = isIndexed && biomeSpawnsMap.isNotEmpty()
+
+    private fun currentVe6HourBucket(): Long {
+        val now = ZonedDateTime.now(VE_ZONE)
+        return now.toLocalDate().toEpochDay() * 4L + (now.hour / 6L)
+    }
+
+    private fun computeModsFingerprint(): String {
+        val modsPart = runCatching {
+            FabricLoader.getInstance().allMods
+                .map { "${it.metadata.id}=${it.metadata.version.friendlyString}" }
+                .sorted()
+                .joinToString("|")
+        }.getOrDefault("")
+        val poolSize = runCatching { CobblemonSpawnPools.WORLD_SPAWN_POOL.details.size }.getOrDefault(0)
+        return "${modsPart.hashCode()}:$poolSize"
+    }
 
     fun invalidateCache() {
         biomeSpawnsMap.clear()
         pokemonToBiomesMap.clear()
         isIndexed = false
+        lastCheckedBucket = -1L
     }
 
-    fun ensureIndexed(server: MinecraftServer) {
-        if (isIndexed && biomeSpawnsMap.isNotEmpty()) return
-
-        synchronized(this) {
-            if (isIndexed && biomeSpawnsMap.isNotEmpty()) return
-            buildIndex(server)
+    fun checkScheduledRefresh(server: MinecraftServer) {
+        if (!isReady()) return
+        val bucket = currentVe6HourBucket()
+        val fp = computeModsFingerprint()
+        if (bucket != lastCheckedBucket || fp != lastModsFingerprint) {
+            scheduleAsyncRefresh(server)
         }
     }
 
-    private fun buildIndex(server: MinecraftServer) {
+    fun ensureIndexed(server: MinecraftServer) {
+        if (isReady()) {
+            checkScheduledRefresh(server)
+            return
+        }
+
+        synchronized(this) {
+            if (isReady()) return
+            if (tryLoadDiskCache()) {
+                val bucket = currentVe6HourBucket()
+                val fp = computeModsFingerprint()
+                if (bucket != lastCheckedBucket || fp != lastModsFingerprint) {
+                    scheduleAsyncRefresh(server)
+                }
+                return
+            }
+            val result = computeSpawnMaps(server)
+            applyComputedMaps(result.first, result.second, computeModsFingerprint(), currentVe6HourBucket(), saveToDisk = true)
+        }
+    }
+
+    private fun scheduleAsyncRefresh(server: MinecraftServer) {
+        if (!refreshInFlight.compareAndSet(false, true)) return
+        CompletableFuture.runAsync {
+            try {
+                val result = computeSpawnMaps(server)
+                val fp = computeModsFingerprint()
+                val bucket = currentVe6HourBucket()
+                if (result.first.isNotEmpty()) {
+                    applyComputedMaps(result.first, result.second, fp, bucket, saveToDisk = true)
+                } else {
+                    lastCheckedBucket = bucket
+                    lastModsFingerprint = fp
+                }
+            } catch (t: Throwable) {
+                System.err.println("[BiomeLocator] Async spawn refresh error: ${t.message}")
+            } finally {
+                refreshInFlight.set(false)
+            }
+        }
+    }
+
+    private fun tryLoadDiskCache(): Boolean {
+        return try {
+            if (!CACHE_FILE.exists()) return false
+            val cached = CACHE_FILE.bufferedReader().use { GSON.fromJson(it, DiskSpawnCache::class.java) } ?: return false
+            if (cached.biomes.isEmpty()) return false
+
+            val loadedPokemonMap = HashMap<String, MutableSet<String>>()
+            for ((biomeId, entries) in cached.biomes) {
+                for (entry in entries) {
+                    val speciesPath = entry.speciesId.substringAfter(':').lowercase()
+                    val displayLower = entry.displayName.lowercase()
+                    loadedPokemonMap.computeIfAbsent(displayLower) { ConcurrentHashMap.newKeySet() }.add(biomeId)
+                    loadedPokemonMap.computeIfAbsent(speciesPath) { ConcurrentHashMap.newKeySet() }.add(biomeId)
+                    val baseDisplay = displayLower.substringBefore(" (").trim()
+                    if (baseDisplay.isNotEmpty()) {
+                        loadedPokemonMap.computeIfAbsent(baseDisplay) { ConcurrentHashMap.newKeySet() }.add(biomeId)
+                    }
+                }
+            }
+            biomeSpawnsMap.clear()
+            biomeSpawnsMap.putAll(cached.biomes)
+            pokemonToBiomesMap.clear()
+            pokemonToBiomesMap.putAll(loadedPokemonMap)
+            lastModsFingerprint = cached.modsFingerprint
+            lastCheckedBucket = cached.lastCheckBucket
+            isIndexed = true
+            println("[BiomeLocator] Loaded spawn cache from ${CACHE_FILE.path} (${biomeSpawnsMap.size} biomes, checked ${cached.checkedAtVe}).")
+            true
+        } catch (t: Throwable) {
+            System.err.println("[BiomeLocator] Failed reading spawn_cache.json, rebuilding: ${t.message}")
+            false
+        }
+    }
+
+    private fun applyComputedMaps(
+        newBiomeMap: Map<String, List<BiomePokemonSpawnEntry>>,
+        newPokemonMap: Map<String, MutableSet<String>>,
+        fingerprint: String,
+        bucket: Long,
+        saveToDisk: Boolean
+    ) {
         biomeSpawnsMap.clear()
+        biomeSpawnsMap.putAll(newBiomeMap)
         pokemonToBiomesMap.clear()
+        pokemonToBiomesMap.putAll(newPokemonMap)
+        lastModsFingerprint = fingerprint
+        lastCheckedBucket = bucket
+        isIndexed = true
+        if (saveToDisk && newBiomeMap.isNotEmpty()) {
+            saveDiskCache(newBiomeMap, fingerprint, bucket)
+        }
+        println("[BiomeLocator] Cobblemon spawn index ready (${biomeSpawnsMap.size} biomes indexed).")
+    }
+
+    private fun saveDiskCache(biomes: Map<String, List<BiomePokemonSpawnEntry>>, fingerprint: String, bucket: Long) {
+        try {
+            CACHE_FILE.parentFile?.mkdirs()
+            val veTimeStr = ZonedDateTime.now(VE_ZONE).format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss 'UTC-4'"))
+            val payload = DiskSpawnCache(
+                version = 1,
+                modsFingerprint = fingerprint,
+                lastCheckBucket = bucket,
+                checkedAtVe = veTimeStr,
+                biomes = biomes
+            )
+            CACHE_FILE.bufferedWriter().use { GSON.toJson(payload, it) }
+        } catch (t: Throwable) {
+            System.err.println("[BiomeLocator] Failed writing spawn_cache.json: ${t.message}")
+        }
+    }
+
+    private fun computeSpawnMaps(server: MinecraftServer): Pair<Map<String, List<BiomePokemonSpawnEntry>>, Map<String, MutableSet<String>>> {
+        val resultBiomeMap = HashMap<String, List<BiomePokemonSpawnEntry>>()
+        val resultPokemonMap = HashMap<String, MutableSet<String>>()
 
         try {
             val pool = CobblemonSpawnPools.WORLD_SPAWN_POOL
@@ -210,9 +369,9 @@ object CobblemonSpawnIntegration {
                     if (weatherReq != "Cualquiera") acc.weathers.add(weatherReq)
 
                     // Index for Pokemon search
-                    pokemonToBiomesMap.computeIfAbsent(displayName.lowercase()) { ConcurrentHashMap.newKeySet() }.add(bId)
-                    pokemonToBiomesMap.computeIfAbsent(baseDisplayName.lowercase()) { ConcurrentHashMap.newKeySet() }.add(bId)
-                    pokemonToBiomesMap.computeIfAbsent(speciesRaw.lowercase()) { ConcurrentHashMap.newKeySet() }.add(bId)
+                    resultPokemonMap.computeIfAbsent(displayName.lowercase()) { ConcurrentHashMap.newKeySet() }.add(bId)
+                    resultPokemonMap.computeIfAbsent(baseDisplayName.lowercase()) { ConcurrentHashMap.newKeySet() }.add(bId)
+                    resultPokemonMap.computeIfAbsent(speciesRaw.lowercase()) { ConcurrentHashMap.newKeySet() }.add(bId)
                 }
             }
 
@@ -228,7 +387,11 @@ object CobblemonSpawnIntegration {
                         val pct = if (totalWeight > 0) ((acc.totalWeight / totalWeight) * 100.0).toFloat() else (100f / bucketList.size)
                         val safePct = ((pct * 10).toInt() / 10f).coerceAtLeast(0.1f)
 
-                        val timeStr = if (acc.times.isEmpty()) "Cualquiera" else acc.times.joinToString("/")
+                        val hasBothTimes = acc.times.contains("Día") && acc.times.contains("Noche")
+                        val timeStr = when {
+                            acc.times.isEmpty() || hasBothTimes -> "Día y noche"
+                            else -> acc.times.joinToString("/")
+                        }
                         val ctxStr = if (acc.contexts.isEmpty()) "Suelo" else acc.contexts.joinToString(" / ")
                         val lightStr = if (acc.lights.isEmpty()) "Cualquiera" else acc.lights.joinToString(", ")
                         val weatherStr = if (acc.weathers.isEmpty()) "Cualquiera" else acc.weathers.joinToString(", ")
@@ -256,15 +419,13 @@ object CobblemonSpawnIntegration {
                 val bucketOrder = mapOf("ultra-rare" to 0, "rare" to 1, "uncommon" to 2, "common" to 3)
                 finalizedList.sortWith(compareBy({ bucketOrder[it.bucket] ?: 4 }, { -it.percentage }))
 
-                biomeSpawnsMap[biomeId] = finalizedList
+                resultBiomeMap[biomeId] = finalizedList
             }
-
-            isIndexed = true
-            println("[BiomeLocator] Cobblemon spawn index successfully built. Indexed ${biomeSpawnsMap.size} biomes with verified habitat spawns.")
         } catch (t: Throwable) {
             System.err.println("[BiomeLocator] Error building Cobblemon spawn index: ${t.message}")
             t.printStackTrace()
         }
+        return Pair(resultBiomeMap, resultPokemonMap)
     }
 
     private fun isDetailValidForBiome(holder: Holder<Biome>, detail: PokemonSpawnDetail): Boolean {

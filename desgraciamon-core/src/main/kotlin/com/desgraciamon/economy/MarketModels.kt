@@ -11,10 +11,12 @@ data class ItemMarketConfig(
 data class MarketConfig(
     var decayIntervalMinutes: Int = 10,
     var decayRate: Double = 0.05,
-    var resetIntervalHours: Int = 4,         // Reseteo configurable de economía en horas
+    var resetIntervalHours: Int = 48,        // Compatibilidad heredada (horas)
+    var resetIntervalDays: Int = 2,          // Cada cuántos días se reinicia el mercado
+    var resetHourVet: Int = 8,               // Hora del reinicio en zona America/Caracas (0-23)
     var trendingBonusPercent: Double = 35.0,  // Bonus extra de pago para objetos en alza
     var trendingItemCount: Int = 3,           // Cantidad de objetos en alza simultáneos
-    var dailyPlayerSellCap: Long = 250000L,   // Límite diario de ganancias por jugador en el mercado (<= 0 desactiva)
+    var dailyPlayerSellCap: Long = 0L,        // Sin límite diario de ventas
     var items: MutableMap<String, ItemMarketConfig> = mutableMapOf()
 )
 

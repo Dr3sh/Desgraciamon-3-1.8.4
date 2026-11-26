@@ -39,9 +39,11 @@ class EconomyMod : ModInitializer {
         )
 
         MarketStore.load()
+        TcgMerchantManager.loadConfig()
         ServerLifecycleEvents.SERVER_STARTING.register { server ->
             MarketStore.initForServer(server)
             MarketServerPreferences.initForServer(server)
+            TcgMerchantManager.initForServer(server)
         }
 
         CommandRegistrationCallback.EVENT.register { dispatcher, _, _ ->
@@ -68,19 +70,27 @@ class EconomyMod : ModInitializer {
             MarketSyncServer.syncToPlayer(handler.player)
         }
 
-        ServerLifecycleEvents.SERVER_STARTED.register {
-            if (MarketStore.state.trendingItems.isEmpty()) {
+        ServerLifecycleEvents.SERVER_STARTED.register { server ->
+            if (MarketStore.state.trendingItems.isEmpty() || MarketEngine.isResetDue(System.currentTimeMillis())) {
                 MarketEngine.triggerEconomyReset(null, broadcastMessage = false)
             }
             CobbleDollarsBankSync.syncPrices()
+            TcgMerchantManager.initOnServerStarted(server)
+        }
+
+        net.fabricmc.fabric.api.event.lifecycle.v1.ServerEntityEvents.ENTITY_LOAD.register { entity, level ->
+            TcgMerchantManager.onEntityLoad(entity, level.server)
         }
 
         // Ticker del servidor para el decaimiento de la saturación y reseteo cíclico
         ServerTickEvents.END_SERVER_TICK.register { server ->
-            if (++tickCounter % 1200 == 0) { // Cada 60 segundos (1200 ticks)
+            val currentTick = ++tickCounter
+            if (currentTick % 100 == 0) {
+                TcgMerchantManager.tick(server)
+            }
+            if (currentTick % 1200 == 0) { // Cada 60 segundos (1200 ticks)
                 val now = System.currentTimeMillis()
-                val resetIntervalMs = (MarketStore.config.resetIntervalHours * 3600000L).coerceAtLeast(60000L)
-                if (now - MarketStore.state.lastResetTimestampMs >= resetIntervalMs) {
+                if (MarketEngine.isResetDue(now)) {
                     MarketEngine.triggerEconomyReset(server, broadcastMessage = true)
                 } else {
                     val intervalTicks = (MarketStore.config.decayIntervalMinutes * 60 * 20).coerceAtLeast(1200)

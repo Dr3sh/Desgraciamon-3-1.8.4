@@ -17,16 +17,15 @@ import net.minecraft.client.gui.components.Button
 import net.minecraft.client.gui.GuiGraphics
 import net.minecraft.client.gui.screens.inventory.InventoryScreen
 import net.minecraft.network.chat.Component
-import net.minecraft.world.item.ItemStack
+import net.minecraft.resources.ResourceLocation
 import org.lwjgl.glfw.GLFW
 import kotlin.math.exp
 
 class LegendaryBestiaryClient : ClientModInitializer {
     private lateinit var openKey: KeyMapping
 
-    private val pokedexIconStack: ItemStack by lazy {
-        ItemStack(CobblemonItems.POKEDEX_RED)
-    }
+    private val pokedexPurpleTexture: ResourceLocation =
+        ResourceLocation.fromNamespaceAndPath("legendary_bestiary", "textures/gui/pokedex_purple.png")
 
     override fun onInitializeClient() {
         TextCatalog.load(mapOf(
@@ -83,14 +82,9 @@ class LegendaryBestiaryClient : ClientModInitializer {
                         pose.scale(scale, scale, 1.0f)
                         pose.translate(-centerX, -centerY, 0.0f)
 
-                        val glowAlphaOuter = ((0x44 + (0x28 * hoverProgress).toInt()).coerceIn(0, 255) shl 24) or 0x8A2BE2
-                        val glowAlphaInner = ((0x66 + (0x33 * hoverProgress).toInt()).coerceIn(0, 255) shl 24) or 0xC040FF
-                        graphics.fill(iconX - 1, iconY - 1, iconX + 17, iconY + 17, glowAlphaOuter)
-                        graphics.fill(iconX + 1, iconY + 1, iconX + 15, iconY + 15, glowAlphaInner)
-
-                        RenderSystem.setShaderColor(0.86f * brightness, 0.32f * brightness, 1.0f * brightness, 1.0f)
-                        graphics.renderItem(pokedexIconStack, iconX, iconY)
-                        graphics.flush()
+                        RenderSystem.enableBlend()
+                        RenderSystem.setShaderColor(brightness, brightness, brightness, 1.0f)
+                        graphics.blit(pokedexPurpleTexture, iconX, iconY, 16, 16, 0f, 0f, 16, 16, 16, 16)
                         RenderSystem.setShaderColor(1.0f, 1.0f, 1.0f, 1.0f)
 
                         pose.popPose()

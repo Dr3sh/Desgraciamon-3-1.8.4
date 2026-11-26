@@ -2,6 +2,7 @@ package com.desgraciamon.announcements
 
 import com.google.gson.GsonBuilder
 import com.google.gson.annotations.SerializedName
+import java.time.Duration
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneId
@@ -13,14 +14,22 @@ enum class ObjectiveType {
     @SerializedName("DEFEAT_POKEMON") DEFEAT_POKEMON,
     @SerializedName("CATCH_TYPE") CATCH_TYPE,
     @SerializedName("CATCH_SPECIES") CATCH_SPECIES,
-    @SerializedName("OBTAIN_BADGE") OBTAIN_BADGE
+    @SerializedName("OBTAIN_BADGE") OBTAIN_BADGE,
+    @SerializedName("EVOLVE_SPECIES") EVOLVE_SPECIES,
+    @SerializedName("WIN_PVP") WIN_PVP,
+    @SerializedName("WIN_SHOWDOWN") WIN_SHOWDOWN,
+    @SerializedName("WIN_PVP_OR_SHOWDOWN") WIN_PVP_OR_SHOWDOWN,
+    @SerializedName("DEFEAT_RCT_NPC") DEFEAT_RCT_NPC,
+    @SerializedName("CRAFT_ITEM") CRAFT_ITEM,
+    @SerializedName("EARN_MONEY") EARN_MONEY,
+    @SerializedName("SPEND_MONEY") SPEND_MONEY
 }
 
 data class Announcement(
     var id: String = "",
     var title: String = "",
     var body: String = "",
-    var color: String = "#F5C842",
+    var color: String = "#F97316",
     var bodyColor: String = "#FFFFFF",
     var imageUrl: String = "",
     var showInChat: Boolean = true,
@@ -32,7 +41,7 @@ data class Mission(
     var id: String = "",
     var title: String = "",
     var body: String = "",
-    var color: String = "#68D7A2",
+    var color: String = "#B91C3C",
     var bodyColor: String = "#E5ECE8",
     var isGuildMission: Boolean = false,
     var targetUsesMemberCount: Boolean = false,
@@ -44,7 +53,8 @@ data class Mission(
     var amount: Int = 1,
     var daily: Boolean = true,
     var repeatable: Boolean = false,
-    var expirationDate: String = "", // Formato "YYYY-MM-DD" o "YYYY-MM-DD HH:mm"
+    var publishAt: String = "", // Hora de Venezuela (UTC-4): "YYYY-MM-DD" o "YYYY-MM-DD HH:mm"
+    var expirationDate: String = "", // Hora de Venezuela (UTC-4): "YYYY-MM-DD" o "YYYY-MM-DD HH:mm"
     var objectives: MutableList<MissionObjective> = mutableListOf(),
     var itemRewards: MutableList<ItemMissionReward> = mutableListOf(),
     var pokemonReward: PokemonMissionReward? = null,
@@ -54,23 +64,48 @@ data class Mission(
     var dailySlot: Int = 0
 ) {
     @JvmOverloads
+    fun isPublished(
+        zoneId: ZoneId = DEFAULT_ZONE_ID,
+        now: ZonedDateTime = ZonedDateTime.now(zoneId)
+    ): Boolean {
+        if (publishAt.isBlank()) return true
+        return runCatching {
+            val localNow = now.withZoneSameInstant(DEFAULT_ZONE_ID).toLocalDateTime()
+            val target = parseVenezuelaDateTime(publishAt, endOfDayIfDateOnly = false) ?: return true
+            !localNow.isBefore(target)
+        }.getOrDefault(true)
+    }
+
+    @JvmOverloads
     fun isExpired(
         zoneId: ZoneId = DEFAULT_ZONE_ID,
         now: ZonedDateTime = ZonedDateTime.now(zoneId)
     ): Boolean {
         if (expirationDate.isBlank()) return false
         return runCatching {
-            val localNow = now.withZoneSameInstant(zoneId)
+            val localNow = now.withZoneSameInstant(DEFAULT_ZONE_ID)
             val trimmed = expirationDate.trim()
             if (trimmed.length == 10) {
                 val date = LocalDate.parse(trimmed)
                 localNow.toLocalDate().isAfter(date)
             } else {
-                val dtf = DateTimeFormatter.ofPattern("yyyy-MM-dd['T'][ ]HH[:mm][:ss]")
-                val parsed = LocalDateTime.parse(trimmed, dtf)
+                val parsed = parseVenezuelaDateTime(trimmed, endOfDayIfDateOnly = true) ?: return false
                 localNow.toLocalDateTime().isAfter(parsed)
             }
         }.getOrDefault(false)
+    }
+
+    @JvmOverloads
+    fun remainingSeconds(
+        zoneId: ZoneId = DEFAULT_ZONE_ID,
+        now: ZonedDateTime = ZonedDateTime.now(zoneId)
+    ): Long? {
+        if (expirationDate.isBlank()) return null
+        return runCatching {
+            val localNow = now.withZoneSameInstant(DEFAULT_ZONE_ID).toLocalDateTime()
+            val target = parseVenezuelaDateTime(expirationDate, endOfDayIfDateOnly = true) ?: return null
+            Duration.between(localNow, target).seconds.coerceAtLeast(0L)
+        }.getOrNull()
     }
 
     fun resolvedCategoryTag(): String {
@@ -89,10 +124,13 @@ data class Mission(
         }
         val categories = types.map { type ->
             when (type) {
-                ObjectiveType.GET_ITEM -> "ITEMS"
+                ObjectiveType.GET_ITEM, ObjectiveType.CRAFT_ITEM -> "ITEMS"
                 ObjectiveType.CATCH_TYPE, ObjectiveType.CATCH_SPECIES -> "CAPTURA"
-                ObjectiveType.DEFEAT_POKEMON -> "COMBATE"
-                ObjectiveType.OBTAIN_BADGE -> "ESPECIAL"
+                ObjectiveType.DEFEAT_POKEMON, ObjectiveType.WIN_PVP,
+                ObjectiveType.WIN_SHOWDOWN, ObjectiveType.WIN_PVP_OR_SHOWDOWN,
+                ObjectiveType.DEFEAT_RCT_NPC -> "COMBATE"
+                ObjectiveType.OBTAIN_BADGE, ObjectiveType.EVOLVE_SPECIES,
+                ObjectiveType.EARN_MONEY, ObjectiveType.SPEND_MONEY -> "ESPECIAL"
             }
         }.distinct()
         return if (categories.size == 1) categories.first() else "ESPECIAL"
@@ -101,6 +139,20 @@ data class Mission(
     companion object {
         val DEFAULT_ZONE_ID: ZoneId = ZoneId.of("America/Caracas")
         val VALID_CATEGORY_TAGS: Set<String> = setOf("CAPTURA", "ITEMS", "COMBATE", "ESPECIAL")
+        private val DATE_TIME_FMT: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd['T'][ ]HH[:mm][:ss]")
+
+        fun parseVenezuelaDateTime(raw: String, endOfDayIfDateOnly: Boolean): LocalDateTime? {
+            val trimmed = raw.trim()
+            if (trimmed.isBlank()) return null
+            return runCatching {
+                if (trimmed.length == 10) {
+                    val date = LocalDate.parse(trimmed)
+                    if (endOfDayIfDateOnly) date.atTime(23, 59, 59) else date.atStartOfDay()
+                } else {
+                    LocalDateTime.parse(trimmed, DATE_TIME_FMT)
+                }
+            }.getOrNull()
+        }
     }
 }
 
@@ -168,9 +220,9 @@ data class DailyUiThemeConfig(
     var dailyAccentHex: String = "#38BDF8",
     var textColorHex: String = "#E6EDF3",
     var mutedTextColorHex: String = "#8B949E",
-    var missionAccentHex: String = "#38BDF8",
+    var missionAccentHex: String = "#B91C3C",
     var guildAccentHex: String = "#A78BFA",
-    var permanentAccentHex: String = "#34D399",
+    var permanentAccentHex: String = "#B91C3C",
     var completedAccentHex: String = "#6E7681",
     var notificationColorHex: String = "#38BDF8"
 )

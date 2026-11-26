@@ -69,6 +69,28 @@ object EconomyCommands {
                     1
                 }
             )
+            .then(Commands.literal("reinicio")
+                .executes { ctx ->
+                    val now = System.currentTimeMillis()
+                    val days = MarketEngine.getResetIntervalDays()
+                    val hourStr = String.format("%02d:00", MarketEngine.getResetHourVet())
+                    val nextReset = MarketEngine.getNextResetTimestampMs(now)
+                    val lastReset = MarketStore.state.lastResetTimestampMs
+                    val remaining = MarketEngine.formatDurationRemaining(nextReset - now)
+                    val nextFormatted = MarketEngine.formatTimestampVet(nextReset)
+                    val lastFormatted = if (lastReset > 0L) MarketEngine.formatTimestampVet(lastReset) else "Sin registro"
+                    ctx.source.sendSuccess({
+                        Component.literal(
+                            "§6§l[MERCADO - REINICIO]\n" +
+                            "§7Falta para el siguiente reinicio: §e$remaining\n" +
+                            "§7Próximo reinicio programado: §a$nextFormatted\n" +
+                            "§7Último reinicio registrado: §f$lastFormatted\n" +
+                            "§7Frecuencia configurada: §bCada $days día(s) a las $hourStr VET"
+                        )
+                    }, false)
+                    1
+                }
+            )
             .then(Commands.literal("establecer")
                 .then(Commands.argument("item", StringArgumentType.word())
                     .suggests { _, builder ->
@@ -126,14 +148,70 @@ object EconomyCommands {
                 )
             )
             .then(Commands.literal("config")
-                .then(Commands.literal("horas_reinicio")
-                    .then(Commands.argument("horas", IntegerArgumentType.integer(1, 168))
+                .then(Commands.literal("dias_reinicio")
+                    .executes { ctx ->
+                        val now = System.currentTimeMillis()
+                        val days = MarketEngine.getResetIntervalDays()
+                        val hourStr = String.format("%02d:00", MarketEngine.getResetHourVet())
+                        val nextReset = MarketEngine.getNextResetTimestampMs(now)
+                        val remaining = MarketEngine.formatDurationRemaining(nextReset - now)
+                        ctx.source.sendSuccess({
+                            Component.literal(
+                                "§eFrecuencia actual: §bCada $days día(s) a las $hourStr VET §7| Próximo en §e$remaining §7(${MarketEngine.formatTimestampVet(nextReset)})"
+                            )
+                        }, false)
+                        1
+                    }
+                    .then(Commands.argument("dias", IntegerArgumentType.integer(1, 30))
                         .executes { ctx ->
-                            val hours = IntegerArgumentType.getInteger(ctx, "horas")
-                            MarketStore.config.resetIntervalHours = hours
+                            val days = IntegerArgumentType.getInteger(ctx, "dias")
+                            MarketStore.config.resetIntervalDays = days
+                            MarketStore.config.resetIntervalHours = days * 24
                             MarketStore.saveConfig()
                             MarketSyncServer.broadcastSync(ctx.source.server)
-                            ctx.source.sendSuccess({ Component.literal("§aIntervalo de reseteo automatico de economia configurado a §e$hours horas§a.") }, true)
+                            val now = System.currentTimeMillis()
+                            val nextReset = MarketEngine.getNextResetTimestampMs(now)
+                            val remaining = MarketEngine.formatDurationRemaining(nextReset - now)
+                            val hourStr = String.format("%02d:00", MarketEngine.getResetHourVet())
+                            ctx.source.sendSuccess({
+                                Component.literal(
+                                    "§aFrecuencia de reinicio del mercado configurada a §ecada $days día(s) §aa las §e$hourStr VET§a. Próximo reinicio: §e${MarketEngine.formatTimestampVet(nextReset)} §7(en $remaining)"
+                                )
+                            }, true)
+                            1
+                        }
+                    )
+                )
+                .then(Commands.literal("hora_reinicio")
+                    .then(Commands.argument("hora", IntegerArgumentType.integer(0, 23))
+                        .executes { ctx ->
+                            val hour = IntegerArgumentType.getInteger(ctx, "hora")
+                            MarketStore.config.resetHourVet = hour
+                            MarketStore.saveConfig()
+                            MarketSyncServer.broadcastSync(ctx.source.server)
+                            val now = System.currentTimeMillis()
+                            val nextReset = MarketEngine.getNextResetTimestampMs(now)
+                            val remaining = MarketEngine.formatDurationRemaining(nextReset - now)
+                            val hourStr = String.format("%02d:00", hour)
+                            ctx.source.sendSuccess({
+                                Component.literal(
+                                    "§aHora de reinicio del mercado configurada a las §e$hourStr VET §7(cada ${MarketEngine.getResetIntervalDays()} día(s)). §aPróximo reinicio: §e${MarketEngine.formatTimestampVet(nextReset)} §7(en $remaining)"
+                                )
+                            }, true)
+                            1
+                        }
+                    )
+                )
+                .then(Commands.literal("horas_reinicio")
+                    .then(Commands.argument("horas", IntegerArgumentType.integer(1, 720))
+                        .executes { ctx ->
+                            val hours = IntegerArgumentType.getInteger(ctx, "horas")
+                            val days = (hours / 24).coerceIn(1, 30)
+                            MarketStore.config.resetIntervalHours = hours
+                            MarketStore.config.resetIntervalDays = days
+                            MarketStore.saveConfig()
+                            MarketSyncServer.broadcastSync(ctx.source.server)
+                            ctx.source.sendSuccess({ Component.literal("§aIntervalo de reseteo automatico de economia configurado a §e$hours horas ($days día(s))§a.") }, true)
                             1
                         }
                     )
@@ -151,6 +229,35 @@ object EconomyCommands {
                         }
                     )
                 )
+            )
+            .then(Commands.literal("vendedor")
+                .executes { ctx ->
+                    val player = ctx.source.playerOrException
+                    val success = BuilderMerchantSpawner.spawn(player, noAi = true)
+                    if (success) {
+                        ctx.source.sendSuccess({ Component.literal("§aMaestro Constructor spawneado correctamente.") }, true)
+                        1
+                    } else {
+                        ctx.source.sendFailure(Component.literal("§cError al spawnear el Maestro Constructor."))
+                        0
+                    }
+                }
+                .then(Commands.literal("movil").executes { ctx ->
+                    val player = ctx.source.playerOrException
+                    val success = BuilderMerchantSpawner.spawn(player, noAi = false)
+                    if (success) {
+                        ctx.source.sendSuccess({ Component.literal("§aMaestro Constructor (con movimiento) spawneado correctamente.") }, true)
+                        1
+                    } else {
+                        ctx.source.sendFailure(Component.literal("§cError al spawnear el Maestro Constructor."))
+                        0
+                    }
+                })
+                .then(Commands.literal("recargar").executes { ctx ->
+                    val shop = BuilderMerchantSpawner.loadBuilderShop()
+                    ctx.source.sendSuccess({ Component.literal("§aTienda de construccion recargada (${shop.size} categorias).") }, true)
+                    1
+                })
             )
             .then(Commands.literal("banquero")
                 .executes { ctx ->
@@ -181,6 +288,58 @@ object EconomyCommands {
                     1
                 })
             )
+            .then(Commands.literal("vendedor_cartas")
+                .executes { ctx ->
+                    val player = ctx.source.playerOrException
+                    val success = TcgMerchantManager.spawn(player, noAi = true)
+                    if (success) {
+                        ctx.source.sendSuccess({ Component.literal("§aColeccionista TCG spawneado correctamente.") }, true)
+                        1
+                    } else {
+                        ctx.source.sendFailure(Component.literal("§cError al spawnear el Coleccionista TCG."))
+                        0
+                    }
+                }
+                .then(Commands.literal("movil").executes { ctx ->
+                    val player = ctx.source.playerOrException
+                    val success = TcgMerchantManager.spawn(player, noAi = false)
+                    if (success) {
+                        ctx.source.sendSuccess({ Component.literal("§aColeccionista TCG (con movimiento) spawneado correctamente.") }, true)
+                        1
+                    } else {
+                        ctx.source.sendFailure(Component.literal("§cError al spawnear el Coleccionista TCG."))
+                        0
+                    }
+                })
+                .then(Commands.literal("rotar").executes { ctx ->
+                    val summary = TcgMerchantManager.rotateNow(ctx.source.server, broadcast = true)
+                    ctx.source.sendSuccess({ Component.literal("§aRotación TCG forzada.\n$summary") }, true)
+                    1
+                })
+                .then(Commands.literal("estado").executes { ctx ->
+                    ctx.source.sendSuccess({ Component.literal(TcgMerchantManager.buildStatusSummary()) }, false)
+                    1
+                })
+                .then(Commands.literal("intervalo")
+                    .then(Commands.argument("horas", IntegerArgumentType.integer(1, 24))
+                        .executes { ctx ->
+                            val hours = IntegerArgumentType.getInteger(ctx, "horas")
+                            TcgMerchantManager.config.rotationIntervalHours = hours
+                            TcgMerchantManager.saveConfig()
+                            val nextFmt = TcgMerchantManager.formatTimestampVet(TcgMerchantManager.getNextRotationMs())
+                            val remaining = TcgMerchantManager.formatDurationRemaining(TcgMerchantManager.getNextRotationMs() - System.currentTimeMillis())
+                            ctx.source.sendSuccess({ Component.literal("§aIntervalo de rotación del Coleccionista TCG configurado a §ecada $hours hora(s) §7(próxima: §e$nextFmt§7, en $remaining).") }, true)
+                            1
+                        }
+                    )
+                )
+                .then(Commands.literal("recargar").executes { ctx ->
+                    TcgMerchantManager.loadConfig()
+                    TcgMerchantManager.rotateNow(ctx.source.server, broadcast = false)
+                    ctx.source.sendSuccess({ Component.literal("§aConfiguración del Coleccionista TCG recargada y stock actualizado.") }, true)
+                    1
+                })
+            )
             .then(Commands.literal("recargar")
                 .executes { ctx ->
                     MarketStore.reload()
@@ -191,9 +350,40 @@ object EconomyCommands {
                 }
             )
 
+        val vendedorBloquesCommand = Commands.literal("vendedor_bloques")
+            .requires { it.hasPermission(2) }
+            .executes { ctx ->
+                val player = ctx.source.playerOrException
+                val success = BuilderMerchantSpawner.spawn(player, noAi = true)
+                if (success) {
+                    ctx.source.sendSuccess({ Component.literal("§aMaestro Constructor spawneado correctamente.") }, true)
+                    1
+                } else {
+                    ctx.source.sendFailure(Component.literal("§cError al spawnear el Maestro Constructor."))
+                    0
+                }
+            }
+            .then(Commands.literal("movil").executes { ctx ->
+                val player = ctx.source.playerOrException
+                val success = BuilderMerchantSpawner.spawn(player, noAi = false)
+                if (success) {
+                    ctx.source.sendSuccess({ Component.literal("§aMaestro Constructor (con movimiento) spawneado correctamente.") }, true)
+                    1
+                } else {
+                    ctx.source.sendFailure(Component.literal("§cError al spawnear el Maestro Constructor."))
+                    0
+                }
+            })
+            .then(Commands.literal("recargar").executes { ctx ->
+                val shop = BuilderMerchantSpawner.loadBuilderShop()
+                ctx.source.sendSuccess({ Component.literal("§aTienda de construccion recargada (${shop.size} categorias).") }, true)
+                1
+            })
+
         dispatcher.register(sellCommand)
         dispatcher.register(marketCommand)
         dispatcher.register(economiaCommand)
+        dispatcher.register(vendedorBloquesCommand)
     }
 
     private enum class SellMode {
@@ -333,12 +523,15 @@ object EconomyCommands {
     private fun executeMarketOverview(player: ServerPlayer): Int {
         player.sendSystemMessage(TextCatalog.component("market.header"))
 
-        // Temporizador de reseteo general
-        val nextReset = MarketStore.state.lastResetTimestampMs + (MarketStore.config.resetIntervalHours * 3600000L)
-        val diffMs = (nextReset - System.currentTimeMillis()).coerceAtLeast(0L)
-        val hours = diffMs / 3600000L
-        val mins = (diffMs % 3600000L) / 60000L
-        player.sendSystemMessage(Component.literal("§8Próximo reseteo cíclico de bolsa: §e${hours}h ${mins}m §7(cada ${MarketStore.config.resetIntervalHours}h)"))
+        // Temporizador de reseteo cíclico del mercado
+        val now = System.currentTimeMillis()
+        val nextReset = MarketEngine.getNextResetTimestampMs(now)
+        val remaining = MarketEngine.formatDurationRemaining(nextReset - now)
+        val days = MarketEngine.getResetIntervalDays()
+        val hourStr = String.format("%02d:00", MarketEngine.getResetHourVet())
+        player.sendSystemMessage(
+            Component.literal("§8Próxima actualización del mercado: §e$remaining §7(cada $days día(s) a las $hourStr VET)")
+        )
 
         // Objetos en alza
         val trending = MarketStore.state.trendingItems

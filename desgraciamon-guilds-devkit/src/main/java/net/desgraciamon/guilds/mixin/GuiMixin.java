@@ -2,9 +2,11 @@ package net.desgraciamon.guilds.mixin;
 
 import net.desgraciamon.guilds.GuildSynergyHudHelper;
 import net.minecraft.client.DeltaTracker;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.Gui;
 import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.world.entity.PlayerRideableJumping;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
@@ -24,6 +26,19 @@ public abstract class GuiMixin {
    private void onRenderExperienceBar(GuiGraphics graphics, int x, CallbackInfo ci) {
       if (GuildSynergyHudHelper.isSynergyActive()) {
          GuildSynergyHudHelper.renderSynergyBar(graphics, x);
+         ci.cancel();
+      }
+   }
+
+   @Inject(
+      method = {"renderJumpMeter"},
+      at = {@At("HEAD")},
+      cancellable = true
+   )
+   private void onRenderJumpMeter(PlayerRideableJumping jumpable, GuiGraphics graphics, int x, CallbackInfo ci) {
+      if (GuildSynergyHudHelper.isSynergyActive()) {
+         GuildSynergyHudHelper.renderSynergyBar(graphics, x);
+         GuildSynergyHudHelper.renderSynergyLevel(graphics, this.getFont());
          ci.cancel();
       }
    }

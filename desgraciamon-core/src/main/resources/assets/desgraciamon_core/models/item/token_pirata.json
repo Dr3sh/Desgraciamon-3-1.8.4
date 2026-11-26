@@ -1,0 +1,7 @@
+{
+  "parent": "minecraft:item/generated",
+  "textures": {
+    "layer0": "desgraciamon_core:item/token_pirata"
+  }
+}
+

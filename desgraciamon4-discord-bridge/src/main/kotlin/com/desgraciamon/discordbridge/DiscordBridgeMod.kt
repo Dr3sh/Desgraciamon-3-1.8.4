@@ -92,7 +92,12 @@ class DiscordBridgeMod : ModInitializer {
                 Commands.literal("discord")
                     .then(Commands.literal("vincular").executes { context ->
                         val player = context.source.playerOrException
-                        val code = DiscordLinkData.get(player.server).createCode(player.uuid, player.name.string)
+                        val data = DiscordLinkData.get(player.server)
+                        if (data.isPlayerLinked(player.uuid)) {
+                            player.sendSystemMessage(TextCatalog.component("link.already_linked_mc"))
+                            return@executes 0
+                        }
+                        val code = data.createCode(player.uuid, player.name.string)
                         val clickableCode = Component.literal(code).setStyle(
                             Style.EMPTY
                                 .withColor(0x55FFFF)
@@ -105,9 +110,8 @@ class DiscordBridgeMod : ModInitializer {
                     })
                     .then(Commands.literal("desvincular").executes { context ->
                         val player = context.source.playerOrException
-                        val removed = DiscordLinkData.get(player.server).unlinkPlayer(player.uuid)
-                        player.sendSystemMessage(TextCatalog.component(if (removed) "unlink.success" else "unlink.missing"))
-                        1
+                        player.sendSystemMessage(TextCatalog.component("unlink.permanent"))
+                        0
                     })
                     .then(Commands.literal("equipo").executes { context ->
                         val player = context.source.playerOrException
@@ -124,6 +128,19 @@ class DiscordBridgeMod : ModInitializer {
                             context.source.sendSuccess({ Component.literal("Recargados ${result.reloaded} catalogos de texto.") }, true)
                             1
                         })
+                        .then(Commands.literal("desvincular")
+                            .then(Commands.argument("jugador", com.mojang.brigadier.arguments.StringArgumentType.word()).executes { context ->
+                                val target = com.mojang.brigadier.arguments.StringArgumentType.getString(context, "jugador")
+                                val removed = DiscordLinkData.get(context.source.server).unlinkByNameOrId(target)
+                                if (removed != null) {
+                                    context.source.sendSuccess({ Component.literal("§aDesvinculado §f${removed.second} §7(${removed.first})§a de Discord.") }, true)
+                                    1
+                                } else {
+                                    context.source.sendFailure(Component.literal("§cNo se encontró ninguna cuenta vinculada para '$target'."))
+                                    0
+                                }
+                            })
+                        )
                     )
             )
         }

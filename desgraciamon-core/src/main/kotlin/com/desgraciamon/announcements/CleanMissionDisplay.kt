@@ -196,11 +196,28 @@ object CleanMissionDisplay {
             ObjectiveType.OBTAIN_BADGE -> {
                 val bName = badgeName(objective.badgeId)
                 if (isGuild && objective.targetUsesMemberCount) {
-                    "Obtener la medalla $bName (Todos los miembros)"
+                    "Obtener la medalla $bName (x$memberCount)"
                 } else {
                     "Obtener la medalla $bName"
                 }
             }
+            ObjectiveType.EVOLVE_SPECIES -> {
+                val pName = if (objective.pokemonId.isNotBlank()) pokemonName(objective.pokemonId) else "Pokémon"
+                "Evolucionar $countPrefix$pName$suffix"
+            }
+            ObjectiveType.WIN_PVP -> "Ganar ${countPrefix}combate(s) PvP$suffix"
+            ObjectiveType.WIN_SHOWDOWN -> "Ganar ${countPrefix}combate(s) en Showdown$suffix"
+            ObjectiveType.WIN_PVP_OR_SHOWDOWN -> "Ganar ${countPrefix}combate(s) PvP o Showdown$suffix"
+            ObjectiveType.DEFEAT_RCT_NPC -> {
+                val npc = if (objective.pokemonId.isNotBlank()) " (${objective.pokemonId})" else ""
+                "Derrotar ${countPrefix}entrenador(es) NPC$npc$suffix"
+            }
+            ObjectiveType.CRAFT_ITEM -> {
+                val itemName = itemDisplayName(objective.itemId)
+                "Fabricar $countPrefix$itemName$suffix"
+            }
+            ObjectiveType.EARN_MONEY -> "Ganar \$${formatMoneyCount(effectiveAmount)} CobbleDollars$suffix"
+            ObjectiveType.SPEND_MONEY -> "Gastar \$${formatMoneyCount(effectiveAmount)} CobbleDollars$suffix"
         }
 
         val guildPrefix = if (isGuild) "[Gremio] " else ""
@@ -253,11 +270,31 @@ object CleanMissionDisplay {
             }
             ObjectiveType.OBTAIN_BADGE -> {
                 val bName = badgeName(objective.badgeId)
-                if (isGuild && objective.targetUsesMemberCount) "Medalla $bName (xMiembro)" else "Medalla $bName"
+                if (isGuild && objective.targetUsesMemberCount) "Medalla $bName (x$safeTarget)" else "Medalla $bName"
             }
+            ObjectiveType.EVOLVE_SPECIES -> {
+                val pName = if (objective.pokemonId.isNotBlank()) pokemonName(objective.pokemonId) else "Pokémon"
+                "Evoluciona $safeTarget $pName"
+            }
+            ObjectiveType.WIN_PVP -> "Gana $safeTarget PvP"
+            ObjectiveType.WIN_SHOWDOWN -> "Gana $safeTarget Showdown"
+            ObjectiveType.WIN_PVP_OR_SHOWDOWN -> "Gana $safeTarget PvP/Showdown"
+            ObjectiveType.DEFEAT_RCT_NPC -> {
+                val npc = if (objective.pokemonId.isNotBlank()) " ${objective.pokemonId}" else " NPC"
+                "Vence $safeTarget$npc"
+            }
+            ObjectiveType.CRAFT_ITEM -> {
+                val itemName = itemDisplayName(objective.itemId)
+                "Fabrica $safeTarget $itemName"
+            }
+            ObjectiveType.EARN_MONEY -> "Gana \$${formatMoneyCount(safeTarget)}"
+            ObjectiveType.SPEND_MONEY -> "Gasta \$${formatMoneyCount(safeTarget)}"
         }
         return "$actionText $clamped/$safeTarget"
     }
+
+    private fun formatMoneyCount(amount: Int): String =
+        java.text.NumberFormat.getIntegerInstance(java.util.Locale.US).format(amount)
 
     fun simpleMissionSummary(
         mission: Mission,

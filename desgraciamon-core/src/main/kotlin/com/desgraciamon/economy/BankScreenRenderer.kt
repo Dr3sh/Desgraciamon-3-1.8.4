@@ -69,12 +69,11 @@ object BankScreenRenderer {
             }
 
             curY += 8
-            // Tiempo restante para el reseteo cíclico
-            val nextReset = MarketStore.state.lastResetTimestampMs + (MarketStore.config.resetIntervalHours * 3600000L)
-            val diffMs = (nextReset - System.currentTimeMillis()).coerceAtLeast(0L)
-            val hours = diffMs / 3600000L
-            val mins = (diffMs % 3600000L) / 60000L
-            graphics.drawString(font, "§8Ciclo: §7${hours}h ${mins}m restantes", panelX + 7, panelY + panelH - 16, 0xFF888888.toInt(), false)
+            // Tiempo restante para el reseteo cíclico del mercado
+            val nextReset = MarketEngine.getDisplayNextResetTimestampMs()
+            val remaining = MarketEngine.formatDurationRemaining(nextReset - System.currentTimeMillis())
+            val hourStr = String.format("%02d", MarketEngine.getResetHourVet())
+            graphics.drawString(font, "§8Actualiza: §e$remaining §7(${hourStr}h VET)", panelX + 7, panelY + panelH - 16, 0xFF888888.toInt(), false)
         } else {
             // Estado activo: desglose detallado de los ítems en venta
             val visibleCount = predictions.take(3)

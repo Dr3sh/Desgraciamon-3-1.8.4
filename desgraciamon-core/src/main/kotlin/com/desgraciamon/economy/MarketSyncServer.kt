@@ -22,7 +22,7 @@ object MarketSyncServer {
                 isTrending = isTrend
             )
         }
-        val nextReset = MarketStore.state.lastResetTimestampMs + (MarketStore.config.resetIntervalHours * 3600000L)
+        val nextReset = MarketEngine.getNextResetTimestampMs()
         return MarketSyncPayload(map, trending, nextReset)
     }
 

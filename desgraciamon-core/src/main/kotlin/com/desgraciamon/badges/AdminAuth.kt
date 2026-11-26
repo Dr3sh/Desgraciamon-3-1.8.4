@@ -27,7 +27,7 @@ object AdminAuth {
     fun isAdminSource(source: CommandSourceStack): Boolean {
         val player = source.player
         if (player != null) {
-            return hasAdminBadge(player.uuid)
+            return isAdminModeActive(player)
         }
         return source.hasPermission(2)
     }
@@ -36,7 +36,7 @@ object AdminAuth {
     fun canManageAdminBadge(source: CommandSourceStack): Boolean {
         val player = source.player
         if (player != null) {
-            return hasAdminBadge(player.uuid)
+            return isAdminModeActive(player)
         }
         return source.hasPermission(4)
     }
@@ -69,6 +69,7 @@ object AdminAuth {
             state.adminMode = active
             BulletinStore.sync(player)
         }
+        refreshPermissions(player.server, player)
         return active
     }
 

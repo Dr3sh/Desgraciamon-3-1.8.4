@@ -5,6 +5,7 @@ import com.cobblemon.mod.common.battles.BattleBuilder
 import com.cobblemon.mod.common.battles.BattleFormat
 import com.cobblemon.mod.common.battles.BattleRegistry
 import com.cobblemon.mod.common.entity.npc.NPCEntity
+import com.cobblemon.mod.common.entity.pokemon.PokemonEntity
 import com.mojang.brigadier.CommandDispatcher
 import com.mojang.brigadier.arguments.IntegerArgumentType
 import com.mojang.brigadier.arguments.StringArgumentType
@@ -33,8 +34,18 @@ object ShowdownArenaCommands {
         val expiresAt: Long
     )
 
+    data class ActiveShowdownBattle(
+        val participants: Set<UUID>,
+        val formatLabel: String,
+        val isPvp: Boolean,
+        var announced: Boolean = false
+    )
+
     private val pendingByChallenged = mutableMapOf<UUID, PendingChallenge>()
     private val activeTestBattles = mutableMapOf<UUID, ActiveTestBattle>()
+    private val activeShowdownBattles = mutableMapOf<UUID, ActiveShowdownBattle>()
+
+    fun getBattleMeta(battleId: UUID): ActiveShowdownBattle? = activeShowdownBattles[battleId]
     private const val CHALLENGE_LIFETIME_MS = 60_000L
     private const val DEFAULT_LEVEL = 50
 
@@ -364,8 +375,38 @@ object ShowdownArenaCommands {
         activeTestBattles.toMap().forEach { (playerId, activeBattle) ->
             val player = server.playerList.getPlayer(playerId)
             val battle = BattleRegistry.getBattle(activeBattle.battleId)
-            if (battle == null || player == null) {
+            if (battle == null || battle.ended || player == null) {
                 removeTestBattle(playerId)
+            }
+        }
+        activeShowdownBattles.toMap().forEach { (battleId, meta) ->
+            val battle = BattleRegistry.getBattle(battleId)
+            if (battle == null || battle.ended) {
+                activeShowdownBattles.remove(battleId)
+                for (uuid in meta.participants) {
+                    server.playerList.getPlayer(uuid)?.let { ShowdownBattlePartySync.clearParty(it) }
+                }
+            } else {
+                for (actor in battle.actors) {
+                    for (bp in actor.pokemonList) {
+                        val entity = bp.entity ?: continue
+                        if (!entity.entityData.get(PokemonEntity.UNBATTLEABLE)) {
+                            entity.entityData.set(PokemonEntity.UNBATTLEABLE, true)
+                        }
+                        if (!entity.isInvulnerable) {
+                            entity.isInvulnerable = true
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fun onPlayerDisconnect(player: ServerPlayer) {
+        removeTestBattle(player.uuid)
+        activeShowdownBattles.entries.forEach { (battleId, meta) ->
+            if (player.uuid in meta.participants) {
+                activeShowdownBattles[battleId] = meta.copy(participants = meta.participants - player.uuid)
             }
         }
     }
@@ -378,6 +419,7 @@ object ShowdownArenaCommands {
 
     fun removeAllTestBattles() {
         activeTestBattles.keys.toList().forEach(::removeTestBattle)
+        activeShowdownBattles.clear()
     }
 
     private fun formatSummaryColored(format: ArenaFormat, level: Int): Component {
@@ -457,6 +499,12 @@ object ShowdownArenaCommands {
                 party = playerTeam
             ).ifSuccessful { battle ->
                 activeTestBattles[player.uuid] = ActiveTestBattle(battle.battleId, trainer)
+                activeShowdownBattles[battle.battleId] = ActiveShowdownBattle(
+                    participants = setOf(player.uuid),
+                    formatLabel = "${format.category.displayName} (${format.genDisplay})",
+                    isPvp = false
+                )
+                ShowdownBattlePartySync.sendParty(player, battle)
                 val playerSummary = playerTeam.joinToString(", ") { "${it.species.name} Nv.${it.level}" }
                 val npcSummary = trainer.party?.joinToString(", ") { "${it.species.name} Nv.${it.level}" }.orEmpty()
                 player.sendSystemMessage(
@@ -574,7 +622,14 @@ object ShowdownArenaCommands {
                 cloneParties = true,
                 healFirst = true,
                 partyAccessor = { player -> temporaryTeams.getValue(player.uuid) }
-            ).ifSuccessful {
+            ).ifSuccessful { battle ->
+                activeShowdownBattles[battle.battleId] = ActiveShowdownBattle(
+                    participants = setOf(challenger.uuid, challenged.uuid),
+                    formatLabel = "${pending.format.category.displayName} (${pending.format.genDisplay})",
+                    isPvp = true
+                )
+                ShowdownBattlePartySync.sendParty(challenger, battle)
+                ShowdownBattlePartySync.sendParty(challenged, battle)
                 val p1Summary = temporaryTeams.getValue(challenger.uuid).joinToString(", ") { "${it.species.name} Nv.${it.level}" }
                 val p2Summary = temporaryTeams.getValue(challenged.uuid).joinToString(", ") { "${it.species.name} Nv.${it.level}" }
                 val coloredFormat = formatSummaryColored(pending.format, pending.level)

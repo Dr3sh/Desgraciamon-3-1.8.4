@@ -61,6 +61,7 @@ class AnnouncementsAdminScreen(
     private var misIdBox: EditBox? = null
     private var misTitleBox: EditBox? = null
     private var misBodyBox: EditBox? = null
+    private var misPublishAtBox: EditBox? = null
     private var misExpirationBox: EditBox? = null
     private var misColor: String = "#38BDF8"
     private var misBodyColor: String = "#E6EDF3"
@@ -211,6 +212,7 @@ class AnnouncementsAdminScreen(
         misIdBox = null
         misTitleBox = null
         misBodyBox = null
+        misPublishAtBox = null
         misExpirationBox = null
         hitosHeaderBox = null
         hitosStartDateBox = null
@@ -1209,6 +1211,7 @@ class AnnouncementsAdminScreen(
         misIdBox?.value?.let { mis.id = it }
         misTitleBox?.value?.let { mis.title = it }
         misBodyBox?.value?.let { mis.body = it }
+        misPublishAtBox?.value?.let { mis.publishAt = it }
         misExpirationBox?.value?.let { mis.expirationDate = it }
         mis.color = misColor
         mis.bodyColor = misBodyColor
@@ -1381,65 +1384,74 @@ class AnnouncementsAdminScreen(
         addRenderableWidget(Button.builder(Component.literal(catLabel)) {
             syncMisDraftFromBoxes()
             val options = listOf(
-                DropdownOption("Auto (Segun objetivo)", ""),
+                DropdownOption("Auto (Según objetivo)", ""),
                 DropdownOption("CAPTURA", "CAPTURA"),
                 DropdownOption("ITEMS", "ITEMS"),
                 DropdownOption("COMBATE", "COMBATE"),
                 DropdownOption("ESPECIAL", "ESPECIAL")
             )
-            openDropdown = ActiveDropdown(left + 158, top + 53, 140, options) { chosen ->
+            openDropdown = ActiveDropdown(left + 158, top + 53, 145, options) { chosen ->
                 misCategoryTag = chosen
                 rebuildUi()
             }
         }.bounds(left + 158, top + 34, 108, 18).build())
 
-        misTitleBox = EditBox(font, left + 46, top + 56, panelW - 58, 18, Component.literal("Título")).apply {
-            value = mis.title
-            setMaxLength(256)
-        }
-        addRenderableWidget(misTitleBox!!)
-
-        val rowY = top + 78
-
-        val scopeLabel = if (misIsGuild) "Misión de Gremio" else "Misión Individual"
+        val scopeLabel = if (misIsGuild) "Gremio" else "Individual"
         addRenderableWidget(Button.builder(Component.literal(scopeLabel)) {
             syncMisDraftFromBoxes()
             val options = listOf(
                 DropdownOption("Misión Individual", false),
                 DropdownOption("Misión de Gremio (Colaborativa)", true)
             )
-            openDropdown = ActiveDropdown(left + 14, rowY + 19, 160, options) { isGuild ->
+            openDropdown = ActiveDropdown(left + 270, top + 53, 170, options) { isGuild ->
                 misIsGuild = isGuild
                 rebuildUi()
             }
-        }.bounds(left + 14, rowY, 140, 18).build())
+        }.bounds(left + 270, top + 34, 96, 18).build())
 
         val freqLabel = when (misFrequency) {
             1 -> "Diaria"
-            2 -> "Diaria Repetible"
-            else -> "Permanente"
+            2 -> "Diaria Rep."
+            else -> "Normal"
         }
         addRenderableWidget(Button.builder(Component.literal(freqLabel)) {
             syncMisDraftFromBoxes()
             val options = listOf(
-                DropdownOption("Permanente (Una vez)", 0),
+                DropdownOption("Normal / Permanente", 0),
                 DropdownOption("Diaria (Reinicio 24h)", 1),
                 DropdownOption("Diaria Repetible", 2)
             )
-            openDropdown = ActiveDropdown(left + 158, rowY + 19, 140, options) { f ->
+            openDropdown = ActiveDropdown(left + 370, top + 53, 145, options) { f ->
                 misFrequency = f
                 rebuildUi()
             }
-        }.bounds(left + 158, rowY, 120, 18).build())
+        }.bounds(left + 370, top + 34, panelW - 384, 18).build())
 
-        misExpirationBox = EditBox(font, left + 284, rowY, panelW - 298, 18, Component.literal("Vence")).apply {
-            setHint(Component.literal("Vence: AAAA-MM-DD"))
+        misTitleBox = EditBox(font, left + 52, top + 56, panelW - 66, 18, Component.literal("Título")).apply {
+            setHint(Component.literal("Título visible al publicarse"))
+            value = mis.title
+            setMaxLength(256)
+        }
+        addRenderableWidget(misTitleBox!!)
+
+        val rowY = top + 78
+        val halfTimeW = (panelW - 118) / 2
+        misPublishAtBox = EditBox(font, left + 52, rowY, halfTimeW, 18, Component.literal("Publicar (VE)")).apply {
+            setHint(Component.literal("Publicar oculta: AAAA-MM-DD HH:mm (VE)"))
+            value = mis.publishAt
+            setMaxLength(24)
+        }
+        addRenderableWidget(misPublishAtBox!!)
+
+        misExpirationBox = EditBox(font, left + 52 + halfTimeW + 46, rowY, panelW - (66 + halfTimeW + 46), 18, Component.literal("Vence (VE)")).apply {
+            setHint(Component.literal("Expira: AAAA-MM-DD HH:mm (VE)"))
             value = mis.expirationDate
             setMaxLength(24)
         }
         addRenderableWidget(misExpirationBox!!)
 
-        misBodyBox = EditBox(font, left + 14, top + 100, panelW - 28, 28, Component.literal("Descripción")).apply {
+        misBodyBox = EditBox(font, left + 52, top + 100, panelW - 66, 22, Component.literal("Descripción")).apply {
+            setHint(Component.literal("Descripción clara para los jugadores"))
             value = mis.body
             setMaxLength(512)
         }
@@ -1453,7 +1465,7 @@ class AnnouncementsAdminScreen(
                 misObjectives.add(MissionObjective(type = ObjectiveType.GET_ITEM, itemId = "minecraft:diamond", amount = 1))
                 rebuildUi()
             }
-        }.bounds(left + 14, top + 133, addObjW, 18).build())
+        }.bounds(left + 14, top + 132, addObjW, 18).build())
 
         val pokeBtnW = if (compactMis) 64 else 70
         val pokeBtnX = left + panelW - 12 - pokeBtnW
@@ -1470,31 +1482,31 @@ class AnnouncementsAdminScreen(
             syncMisDraftFromBoxes()
             misMoneyReward += 500L
             rebuildUi()
-        }.bounds(five00BtnX, top + 133, five00BtnW, 18).build())
+        }.bounds(five00BtnX, top + 132, five00BtnW, 18).build())
 
         addRenderableWidget(Button.builder(Component.literal("+5k$")) {
             syncMisDraftFromBoxes()
             misMoneyReward += 5000L
             rebuildUi()
-        }.bounds(fiveKBtnX, top + 133, fiveKBtnW, 18).build())
+        }.bounds(fiveKBtnX, top + 132, fiveKBtnW, 18).build())
 
         addRenderableWidget(Button.builder(Component.literal("0$")) {
             syncMisDraftFromBoxes()
             misMoneyReward = 0L
             rebuildUi()
-        }.bounds(zeroBtnX, top + 133, zeroBtnW, 18).build())
+        }.bounds(zeroBtnX, top + 132, zeroBtnW, 18).build())
 
         addRenderableWidget(Button.builder(Component.literal("+ Objeto")) {
             syncMisDraftFromBoxes()
             misItemRewards.add(ItemMissionReward("minecraft:diamond", 1))
             rebuildUi()
-        }.bounds(itemBtnX, top + 133, itemBtnW, 18).build())
+        }.bounds(itemBtnX, top + 132, itemBtnW, 18).build())
 
         addRenderableWidget(Button.builder(Component.literal("+ Pokémon")) {
             syncMisDraftFromBoxes()
             misPokemonRewards.add(PokemonMissionReward("cobblemon:eevee", "shiny=yes"))
             rebuildUi()
-        }.bounds(pokeBtnX, top + 133, pokeBtnW, 18).build())
+        }.bounds(pokeBtnX, top + 132, pokeBtnW, 18).build())
 
         var objY = top + 156
         misObjectives.take(3).forEachIndexed { idx, obj ->
@@ -1504,29 +1516,46 @@ class AnnouncementsAdminScreen(
                 ObjectiveType.CATCH_TYPE -> "Tipo"
                 ObjectiveType.CATCH_SPECIES -> "Especie"
                 ObjectiveType.OBTAIN_BADGE -> "Medalla"
+                ObjectiveType.EVOLVE_SPECIES -> "Evolución"
+                ObjectiveType.WIN_PVP -> "PvP"
+                ObjectiveType.WIN_SHOWDOWN -> "Showdown"
+                ObjectiveType.WIN_PVP_OR_SHOWDOWN -> "PvP/Show."
+                ObjectiveType.DEFEAT_RCT_NPC -> "NPC RCT"
+                ObjectiveType.CRAFT_ITEM -> "Crafteo"
+                ObjectiveType.EARN_MONEY -> "Ganar $"
+                ObjectiveType.SPEND_MONEY -> "Gastar $"
             }
-            val typeBtnW = if (compactMis) 56 else 68
+            val typeBtnW = if (compactMis) 62 else 74
             val detX = left + 14 + typeBtnW + 3
             val rightControlsLeft = left + panelW - (when {
-                misIsGuild -> 160
-                !obj.targetUsesMemberCount -> 106
+                misIsGuild -> 166
+                !obj.targetUsesMemberCount -> 114
                 else -> 38
             })
-            val detAvail = (rightControlsLeft - 4 - detX).coerceAtLeast(120)
+            val detAvail = (rightControlsLeft - 4 - detX).coerceAtLeast(110)
 
             addRenderableWidget(Button.builder(Component.literal(typeLabel)) {
                 syncMisDraftFromBoxes()
                 val options = listOf(
                     DropdownOption("Obtener Objeto", ObjectiveType.GET_ITEM),
-                    DropdownOption("Derrotar Pokémon", ObjectiveType.DEFEAT_POKEMON),
-                    DropdownOption("Capturar Tipo", ObjectiveType.CATCH_TYPE),
+                    DropdownOption("Craftear / Fabricar Objeto", ObjectiveType.CRAFT_ITEM),
                     DropdownOption("Capturar Especie", ObjectiveType.CATCH_SPECIES),
+                    DropdownOption("Capturar Tipo", ObjectiveType.CATCH_TYPE),
+                    DropdownOption("Derrotar Pokémon", ObjectiveType.DEFEAT_POKEMON),
+                    DropdownOption("Evolucionar Especie Inicial", ObjectiveType.EVOLVE_SPECIES),
+                    DropdownOption("Ganar Combates PvP", ObjectiveType.WIN_PVP),
+                    DropdownOption("Ganar en Showdown", ObjectiveType.WIN_SHOWDOWN),
+                    DropdownOption("Ganar PvP o Showdown", ObjectiveType.WIN_PVP_OR_SHOWDOWN),
+                    DropdownOption("Vencer Entrenador NPC (rctmod)", ObjectiveType.DEFEAT_RCT_NPC),
+                    DropdownOption("Ganar Dinero (Temporal)", ObjectiveType.EARN_MONEY),
+                    DropdownOption("Gastar Dinero (Temporal)", ObjectiveType.SPEND_MONEY),
                     DropdownOption("Ganar Medalla", ObjectiveType.OBTAIN_BADGE)
                 )
-                openDropdown = ActiveDropdown(left + 14, objY + 19, 140, options) { selectedType ->
+                openDropdown = ActiveDropdown(left + 14, objY + 19, 195, options) { selectedType ->
                     obj.type = selectedType
                     if (selectedType == ObjectiveType.CATCH_TYPE && obj.pokemonType.isBlank()) obj.pokemonType = "fire"
                     if (selectedType == ObjectiveType.OBTAIN_BADGE && obj.badgeId.isBlank()) obj.badgeId = GymBadges.ALL_GYM_BADGES.firstOrNull()?.id ?: "kanto_boulder_badge"
+                    if ((selectedType == ObjectiveType.EARN_MONEY || selectedType == ObjectiveType.SPEND_MONEY) && obj.amount < 100) obj.amount = 5000
                     rebuildUi()
                 }
             }.bounds(left + 14, objY, typeBtnW, 18).build())
@@ -1588,6 +1617,7 @@ class AnnouncementsAdminScreen(
                     val consW = if (detAvail < 240) 56 else 64
                     val boxW = minOf(120, (detAvail - consW - 3).coerceAtLeast(60))
                     val box = EditBox(font, detX, objY, boxW, 18, Component.literal("ID Objeto")).apply {
+                        setHint(Component.literal("minecraft:diamond"))
                         value = obj.itemId
                         setMaxLength(64)
                         setResponder { obj.itemId = it }
@@ -1601,6 +1631,40 @@ class AnnouncementsAdminScreen(
                         obj.consumeOnClaim = !obj.consumeOnClaim
                         rebuildUi()
                     }.bounds(detX + boxW + 3, objY, consW, 18).build())
+                }
+                ObjectiveType.CRAFT_ITEM -> {
+                    val box = EditBox(font, detX, objY, minOf(165, detAvail), 18, Component.literal("ID Objeto a craftear")).apply {
+                        setHint(Component.literal("Objeto a craftear (ej. minecraft:anvil)"))
+                        value = obj.itemId
+                        setMaxLength(64)
+                        setResponder { obj.itemId = it }
+                    }
+                    objectiveTargetBoxes.add(box)
+                    addRenderableWidget(box)
+                }
+                ObjectiveType.EVOLVE_SPECIES -> {
+                    val box = EditBox(font, detX, objY, minOf(165, detAvail), 18, Component.literal("Especie inicial")).apply {
+                        setHint(Component.literal("Especie inicial (ej. charmander)"))
+                        value = obj.pokemonId
+                        setMaxLength(48)
+                        setResponder { obj.pokemonId = it }
+                    }
+                    objectiveTargetBoxes.add(box)
+                    addRenderableWidget(box)
+                }
+                ObjectiveType.DEFEAT_RCT_NPC -> {
+                    val box = EditBox(font, detX, objY, minOf(165, detAvail), 18, Component.literal("ID NPC RCT (opcional)")).apply {
+                        setHint(Component.literal("ID NPC RCT (vacío = cualquiera)"))
+                        value = obj.pokemonId
+                        setMaxLength(64)
+                        setResponder { obj.pokemonId = it }
+                    }
+                    objectiveTargetBoxes.add(box)
+                    addRenderableWidget(box)
+                }
+                ObjectiveType.WIN_PVP, ObjectiveType.WIN_SHOWDOWN, ObjectiveType.WIN_PVP_OR_SHOWDOWN,
+                ObjectiveType.EARN_MONEY, ObjectiveType.SPEND_MONEY -> {
+                    // Sin campo adicional; la cantidad/meta va a la derecha
                 }
                 ObjectiveType.DEFEAT_POKEMON -> {
                     val lvlW = if (detAvail < 260) 40 else 48
@@ -1697,26 +1761,32 @@ class AnnouncementsAdminScreen(
             }
 
             if (misIsGuild) {
-                val scaleLabel = if (obj.targetUsesMemberCount) "xMiembro" else "Fijo"
+                val scaleLabel = if (obj.targetUsesMemberCount) "xMiembros" else "Fijo"
                 addRenderableWidget(Button.builder(Component.literal(scaleLabel)) {
                     syncMisDraftFromBoxes()
                     obj.targetUsesMemberCount = !obj.targetUsesMemberCount
                     rebuildUi()
-                }.bounds(left + panelW - 156, objY, 50, 18).build())
+                }.bounds(left + panelW - 164, objY, 50, 18).build())
             }
 
             if (!obj.targetUsesMemberCount) {
-                addRenderableWidget(Button.builder(Component.literal("-")) {
-                    syncMisDraftFromBoxes()
-                    obj.amount = maxOf(1, obj.amount - 1)
-                    rebuildUi()
-                }.bounds(left + panelW - 102, objY, 18, 18).build())
+                val amtBox = EditBox(font, left + panelW - 110, objY, 46, 18, Component.literal("Meta")).apply {
+                    value = obj.amount.toString()
+                    setMaxLength(10)
+                    setResponder { txt ->
+                        val parsed = txt.trim().toIntOrNull()
+                        if (parsed != null && parsed > 0) obj.amount = parsed
+                    }
+                }
+                objectiveTargetBoxes.add(amtBox)
+                addRenderableWidget(amtBox)
 
                 addRenderableWidget(Button.builder(Component.literal("+")) {
                     syncMisDraftFromBoxes()
-                    obj.amount = minOf(999, obj.amount + 1)
+                    val step = if (obj.type == ObjectiveType.EARN_MONEY || obj.type == ObjectiveType.SPEND_MONEY) 1000 else 1
+                    obj.amount = (obj.amount + step).coerceAtMost(1_000_000_000)
                     rebuildUi()
-                }.bounds(left + panelW - 58, objY, 18, 18).build())
+                }.bounds(left + panelW - 60, objY, 20, 18).build())
             }
 
             addRenderableWidget(Button.builder(Component.literal("X")) {
@@ -1725,7 +1795,7 @@ class AnnouncementsAdminScreen(
                     misObjectives.removeAt(idx)
                     rebuildUi()
                 }
-            }.bounds(left + panelW - 34, objY, 20, 18).build())
+            }.bounds(left + panelW - 36, objY, 22, 18).build())
 
             objY += 22
         }
@@ -1797,6 +1867,7 @@ class AnnouncementsAdminScreen(
                 targetUsesMemberCount = misTargetUsesMemberCount || misObjectives.any { it.targetUsesMemberCount },
                 daily = misFrequency >= 1,
                 repeatable = misFrequency == 2,
+                publishAt = misPublishAtBox?.value?.trim() ?: mis.publishAt,
                 expirationDate = misExpirationBox?.value?.trim() ?: mis.expirationDate,
                 objectives = misObjectives,
                 itemRewards = misItemRewards,
@@ -1941,20 +2012,19 @@ class AnnouncementsAdminScreen(
             renderHitoEditorOverlay(graphics, left, top, panelW, panelH)
         } else if (editingMission != null) {
             val mis = editingMission!!
-            val headerTitle = if (isCreatingNew) "Crear Nueva Misión" else "Editando Misión: ${mis.title}"
-            graphics.drawString(font, Component.literal(headerTitle), left + 14, top + 10, 0xFF38BDF8.toInt())
+            val headerTitle = if (isCreatingNew) "Crear Nueva Misión (Hora Venezuela UTC-4)" else "Editando Misión: ${mis.title}"
+            graphics.drawString(font, Component.literal(headerTitle), left + 14, top + 10, 0xFFF43F5E.toInt())
 
+            val halfTimeW = (panelW - 118) / 2
             graphics.drawString(font, Component.literal("ID:"), left + 14, top + 38, 0xFF8B949E.toInt())
             graphics.drawString(font, Component.literal("Título:"), left + 14, top + 60, 0xFF8B949E.toInt())
+            graphics.drawString(font, Component.literal("Pub VE:"), left + 14, top + 82, 0xFFFBBF24.toInt())
+            graphics.drawString(font, Component.literal("Vence:"), left + 52 + halfTimeW + 6, top + 82, 0xFFF43F5E.toInt())
+            graphics.drawString(font, Component.literal("Desc:"), left + 14, top + 106, 0xFF8B949E.toInt())
+            graphics.fill(left + 12, top + 126, left + panelW - 12, top + 127, 0xFF2D333B.toInt())
             val rewardSummary = "Recompensas: ${misMoneyReward}$ | ${misItemRewards.size} Objetos | ${misPokemonRewards.size} Pokémon"
             graphics.drawString(font, Component.literal(font.plainSubstrByWidth(rewardSummary, panelW - 240)), left + 14, top + panelH - 26, 0xFFFBBF24.toInt())
 
-            misObjectives.take(3).forEachIndexed { idx, obj ->
-                val objY = top + 156 + idx * 22
-                if (!obj.targetUsesMemberCount) {
-                    graphics.drawCenteredString(font, "${obj.amount}", left + panelW - 72, objY + 5, 0xFFE6EDF3.toInt())
-                }
-            }
             misItemRewards.take(2).forEachIndexed { rIdx, rew ->
                 val rewY = top + 156 + misObjectives.take(3).size * 22 + 4 + rIdx * 22
                 graphics.drawCenteredString(font, "x${rew.count}", left + 168, rewY + 5, 0xFFE6EDF3.toInt())

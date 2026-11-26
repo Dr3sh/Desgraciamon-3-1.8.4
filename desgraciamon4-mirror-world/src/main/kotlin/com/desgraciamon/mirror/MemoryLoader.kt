@@ -5,6 +5,7 @@ import net.minecraft.nbt.CompoundTag
 import net.minecraft.nbt.NbtAccounter
 import net.minecraft.nbt.NbtIo
 import net.minecraft.resources.ResourceLocation
+import net.minecraft.server.MinecraftServer
 import org.slf4j.LoggerFactory
 import java.io.File
 import java.util.UUID
@@ -38,33 +39,61 @@ object MemoryLoader {
 
     fun clearCache() = cache.clear()
 
-    fun get(owner: UUID): OwnerMemories = cache.getOrPut(owner) { load(owner) }
+    fun get(owner: UUID, server: MinecraftServer? = null): OwnerMemories = cache.getOrPut(owner) { load(owner, server) }
 
-    private fun load(owner: UUID): OwnerMemories {
+    private fun load(owner: UUID, server: MinecraftServer?): OwnerMemories {
         val config = MirrorSettings.config
         val all = mutableListOf<MemoryEntry>()
-        val aliases = config.uuidAliases[owner.toString()].orEmpty()
-        val candidateUuids = listOf(owner.toString()) + aliases
+        val seenKeys = hashSetOf<String>()
+        val discordId = server?.let { DiscordBridgeHook.getDiscordId(it, owner) }
+        val username = server?.let { srv ->
+            srv.playerList.getPlayer(owner)?.scoreboardName ?: srv.profileCache?.get(owner)?.orElse(null)?.name
+        }
+        val candidateUuids = PlayerLinksConfig.resolveMemoryUuids(discordId, username, owner)
 
         for (source in config.sources) {
-            readStore(source, "playerpartystore", candidateUuids)?.let { root ->
+            val seasonLabel = normalizeSeasonLabel(source.label, source.path)
+            for (root in readStores(source, "playerpartystore", candidateUuids)) {
                 slotsOf(root).forEach { (slot, tag) ->
-                    toEntry(tag, source.label, "Equipo · $slot", true)?.let(all::add)
+                    toEntry(tag, seasonLabel, "Equipo · $slot", true)?.let { entry ->
+                        val dedupKey = pokemonDedupKey(tag, entry)
+                        if (seenKeys.add(dedupKey)) all.add(entry)
+                    }
                 }
             }
-            readStore(source, "pcstore", candidateUuids)?.let { root ->
+            for (root in readStores(source, "pcstore", candidateUuids)) {
                 root.allKeys.filter { BOX.matches(it) }
                     .sortedBy { it.removePrefix("Box").toInt() }
                     .forEach { boxKey ->
                         val box = root.getCompound(boxKey)
                         val boxNumber = boxKey.removePrefix("Box").toInt() + 1
                         slotsOf(box).forEach { (_, tag) ->
-                            toEntry(tag, source.label, "PC · Caja $boxNumber", false)?.let(all::add)
+                            toEntry(tag, seasonLabel, "PC · Caja $boxNumber", false)?.let { entry ->
+                                val dedupKey = pokemonDedupKey(tag, entry)
+                                if (seenKeys.add(dedupKey)) all.add(entry)
+                            }
                         }
                     }
             }
         }
         return OwnerMemories(all, select(all, config))
+    }
+
+    private fun normalizeSeasonLabel(label: String, path: String): String {
+        val combined = "$label $path".lowercase()
+        return when {
+            combined.contains("2") -> "Desgraciamon 2"
+            combined.contains("1") -> "Desgraciamon 1"
+            label.isNotBlank() -> label
+            else -> "Desgraciamon 1"
+        }
+    }
+
+    private fun pokemonDedupKey(tag: CompoundTag, entry: MemoryEntry): String {
+        if (tag.hasUUID("UUID")) {
+            return tag.getUUID("UUID").toString()
+        }
+        return "${entry.season}|${entry.speciesId}|${entry.level}|${entry.nickname}"
     }
 
     private fun slotsOf(root: CompoundTag): List<Pair<String, CompoundTag>> =
@@ -73,8 +102,9 @@ object MemoryLoader {
             .map { it to root.getCompound(it) }
             .filter { (_, tag) -> tag.contains("Species") }
 
-    private fun readStore(source: MemorySource, store: String, candidateUuids: List<String>): CompoundTag? {
+    private fun readStores(source: MemorySource, store: String, candidateUuids: List<String>): List<CompoundTag> {
         val base = File(source.path, store)
+        val results = mutableListOf<CompoundTag>()
         for (id in candidateUuids) {
             val candidates = listOf(File(base, "${id.take(2)}/$id.dat"), File(base, "$id.dat"))
             val file = candidates.firstOrNull { it.isFile } ?: continue
@@ -82,9 +112,9 @@ object MemoryLoader {
                 .recoverCatching { NbtIo.read(file.toPath()) ?: throw IllegalStateException("archivo vacío") }
                 .onFailure { logger.error("No se pudo leer ${file.path}", it) }
                 .getOrNull()
-            if (tag != null) return tag
+            if (tag != null) results.add(tag)
         }
-        return null
+        return results
     }
 
     private fun toEntry(tag: CompoundTag, season: String, origin: String, fromParty: Boolean): MemoryEntry? {

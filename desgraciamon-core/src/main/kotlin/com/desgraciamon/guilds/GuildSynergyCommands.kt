@@ -84,8 +84,7 @@ object GuildSynergyCommands {
             .requires { it.hasPermission(2) }
             .then(synergyNode)
 
-        val registeredGremio = dispatcher.register(gremioNode)
-        dispatcher.register(Commands.literal("gremios").requires { it.hasPermission(2) }.redirect(registeredGremio))
+        dispatcher.register(gremioNode)
 
         val registeredSynergy = dispatcher.register(synergyNode)
         dispatcher.register(Commands.literal("guildsynergy").requires { it.hasPermission(2) }.redirect(registeredSynergy))

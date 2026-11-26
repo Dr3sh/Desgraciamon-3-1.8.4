@@ -58,14 +58,12 @@ object SkinConverterService {
                 return@supplyAsync resolveFromPlayerNameOrUuid(userOrUuid)
             }
 
-            // 3. NameMC Skin URL (if 64-char hex hash)
+            // 3. NameMC Skin URL
             val nameMcSkinMatch = NAMEMC_SKIN_REGEX.matcher(trimmed)
             if (nameMcSkinMatch.find()) {
                 val skinId = nameMcSkinMatch.group(1)
-                if (skinId.length == 64) {
-                    val fullUrl = "http://textures.minecraft.net/texture/$skinId"
-                    return@supplyAsync SkinResult(fullUrl, skinId, "classic")
-                }
+                val bytes = downloadBytes("https://s.namemc.com/i/$skinId.png")
+                return@supplyAsync uploadToMineskinMultipart(bytes, "skin.png")
             }
 
             // 4. Direct image link (Discord CDN, Imgur, etc.)
@@ -201,9 +199,11 @@ object SkinConverterService {
         val skinData = skinJson.getAsJsonObject("skin") ?: throw IllegalStateException("Estructura de skin inválida.")
         val textureObj = skinData.getAsJsonObject("texture") ?: throw IllegalStateException("Textura no encontrada en respuesta.")
 
-        val fullUrl = textureObj.getAsJsonObject("url")?.get("skin")?.asString
-            ?: "http://textures.minecraft.net/texture/" + (textureObj.getAsJsonObject("hash")?.get("skin")?.asString ?: "")
-        val hash = textureObj.getAsJsonObject("hash")?.get("skin")?.asString ?: fullUrl.substringAfterLast("/")
+        val mojangSkinUrl = textureObj.getAsJsonObject("url")?.get("skin")?.asString?.trim().orEmpty()
+        val mojangHash = mojangSkinUrl.substringAfterLast("/").substringBefore("?").trim()
+        val fallbackHash = textureObj.getAsJsonObject("hash")?.get("skin")?.asString?.trim().orEmpty()
+        val hash = mojangHash.ifBlank { fallbackHash }
+        val fullUrl = mojangSkinUrl.ifBlank { "http://textures.minecraft.net/texture/$hash" }
         val variant = skinData.get("variant")?.asString ?: "classic"
 
         return SkinResult(fullUrl, hash, variant)
@@ -236,18 +236,18 @@ object SkinConverterService {
         val isSlim = result.model.equals("slim", ignoreCase = true)
         val modelArg = if (isSlim) "slim" else "classic"
         val modelDisplay = if (isSlim) "Alex (Slim - 3px)" else "Steve (Classic - 4px)"
-        val renderUrl = "https://visage.surgeplay.com/full/512/${result.textureHash}"
-        val headUrl = "https://visage.surgeplay.com/face/128/${result.textureHash}"
+        val renderUrl = "https://mc-heads.net/body/${result.textureHash}/right"
+        val headUrl = "https://mc-heads.net/avatar/${result.textureHash}/128"
 
-        val commandStr = "/skin set web $modelArg \"${result.textureUrl}\""
+        val commandStr = "/skin set web $modelArg ${result.textureUrl}"
 
         val descriptionText = if (linkedMcName != null) {
             "Tu skin ha sido convertida exitosamente.\n" +
-            "Puedes aplicarla directamente con el botón de abajo a **$linkedMcName** o copiar el comando:"
+            "Elige el modelo (**Steve** o **Alex**) abajo para aplicarla a **$linkedMcName**, o copia el comando:"
         } else {
             "Tu skin ha sido convertida exitosamente.\n" +
             "Copia el comando de abajo y pégalo directamente en Minecraft:\n" +
-            "*(Vincula tu cuenta con `/discord vincular` en el juego para aplicártelas con 1 clic)*"
+            "*(Vincula tu cuenta con `/cuenta vincular` en el juego para aplicártelas con 1 clic)*"
         }
 
         return EmbedBuilder()

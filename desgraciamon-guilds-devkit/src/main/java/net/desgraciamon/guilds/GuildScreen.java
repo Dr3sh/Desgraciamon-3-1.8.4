@@ -1,5 +1,12 @@
 package net.desgraciamon.guilds;
 
+import com.cobblemon.mod.common.client.gui.PokemonGuiUtilsKt;
+import com.cobblemon.mod.common.client.gui.ProfileTransformType;
+import com.cobblemon.mod.common.client.render.models.blockbench.FloatingState;
+import com.cobblemon.mod.common.entity.PoseType;
+import com.cobblemon.mod.common.pokemon.RenderablePokemon;
+import org.joml.Quaternionf;
+import java.util.Objects;
 import com.cobblemon.mod.common.CobblemonSounds;
 import com.cobblemon.mod.common.api.moves.Move;
 import com.cobblemon.mod.common.api.pokemon.PokemonProperties;
@@ -133,9 +140,10 @@ final class GuildScreen extends Screen {
       }
       try {
          String cleanSpecies = species.toLowerCase(Locale.ROOT).replace(" ", "_");
-         Species speciesObj = PokemonSpecies.getByName(cleanSpecies);
+         String shortName = cleanSpecies.contains(":") ? cleanSpecies.substring(cleanSpecies.indexOf(':') + 1) : cleanSpecies;
+         Species speciesObj = PokemonSpecies.getByName(shortName);
          if (speciesObj == null) {
-            speciesObj = PokemonSpecies.getByIdentifier(ResourceLocation.tryParse("cobblemon:" + cleanSpecies));
+            speciesObj = PokemonSpecies.getByIdentifier(ResourceLocation.tryParse("cobblemon:" + shortName));
          }
          if (speciesObj == null) {
             speciesObj = PokemonSpecies.getByIdentifier(ResourceLocation.tryParse(cleanSpecies));
@@ -273,8 +281,8 @@ final class GuildScreen extends Screen {
       List<FormattedCharSequence> lines = this.font.split(Component.literal(entry.actionText()), cardW - 14);
       int cardH = Math.max(26, 15 + lines.size() * 10);
       boolean isHovered = mouseX >= x && mouseX < x + cardW && mouseY >= y && mouseY < y + cardH;
-      int bg = isHovered ? -14866132 : -15392991;
-      int border = isHovered ? -12692394 : -14339274;
+      int bg = isHovered ? tintSurface(0x1D2532, 0.28F, 0xFF) : tintSurface(0x151B24, 0.20F, 0xFF);
+      int border = isHovered ? accentColor() : tintSurface(0x252E3C, 0.34F, 0xFF);
       graphics.fill(x, y, x + cardW, y + cardH, bg);
       this.drawOutline(graphics, x, y, cardW, cardH, border);
       graphics.fill(x, y, x + 3, y + cardH, entry.color());
@@ -570,9 +578,9 @@ final class GuildScreen extends Screen {
             int formY = cy + 32;
             this.nameInput = this.addInput(cx + 30, formY + 16, cardW - 60, 20, "Pirate Token Gang", 24, this.draftName);
             this.nameInput.setResponder(val -> this.draftName = val);
-            int barW = cardW - 100;
-            int specY = formY + 54;
-            this.addRenderableWidget(new GuildScreen.HueBarWidget(cx + 30, specY, barW, 18, hex -> this.draftColor = hex));
+            int barW = cardW - 130;
+            int specY = formY + 52;
+            this.addRenderableWidget(new GuildScreen.HueBarWidget(cx + 30, specY, barW, 46, hex -> this.draftColor = hex));
             int iconSize = 22;
             int iconGap = 6;
             int totalIconsW = GUILD_ICONS.length * iconSize + (GUILD_ICONS.length - 1) * iconGap;
@@ -793,8 +801,14 @@ final class GuildScreen extends Screen {
       }));
    }
 
+   private static List<XaeroWaypointBridge.LocalWaypoint> combineLocalWaypoints() {
+      List<XaeroWaypointBridge.LocalWaypoint> combined = new ArrayList<>(XaeroWaypointBridge.localWaypoints());
+      combined.addAll(WaystonesWaypointBridge.localWaystones());
+      return combined;
+   }
+
    private void initWaypoints(GuildSyncPayload data) {
-      this.localWaypoints = XaeroWaypointBridge.localWaypoints();
+      this.localWaypoints = combineLocalWaypoints();
       int filterY = this.panelY + 46;
       int chipW = 54;
 
@@ -830,7 +844,7 @@ final class GuildScreen extends Screen {
                rowHeight - 2,
                waypoint.name(),
                waypoint.x() + ", " + waypoint.y() + ", " + waypoint.z(),
-               this.selectedLocalWaypoint == row,
+               this.selectedLocalWaypoint == index,
                () -> {
                   this.selectedLocalWaypoint = index;
                   this.selectedGuildWaypoint = "";
@@ -959,9 +973,9 @@ final class GuildScreen extends Screen {
          this.nameInput = this.addInput(this.contentX + 10, card1Y + 18, nameW, 20, "Ej. Antau maldito abandonico!", 24, this.draftName);
          this.nameInput.setResponder(val -> this.draftName = val);
          int card2Y = card1Y + card1H + 6;
-         int card2H = 54;
-         int barW = this.contentWidth - 48;
-         this.addRenderableWidget(new GuildScreen.HueBarWidget(this.contentX + 10, card2Y + 22, barW, 20, hex -> this.draftColor = hex));
+         int card2H = 78;
+         int barW = this.contentWidth - 88;
+         this.addRenderableWidget(new GuildScreen.HueBarWidget(this.contentX + 10, card2Y + 20, barW, 50, hex -> this.draftColor = hex));
          int card3Y = card2Y + card2H + 6;
          int iconSize = 26;
          int iconGap = 6;
@@ -1096,15 +1110,16 @@ final class GuildScreen extends Screen {
             float scale = 1.65F;
             int offset = (int)Math.round((double)(16.0F * scale) / 2.0);
             if (heldStack != null && !heldStack.isEmpty()) {
+               graphics.flush();
+               RenderSystem.enableDepthTest();
                graphics.pose().pushPose();
-               graphics.pose().translate((float)(localMouseX - offset), (float)(localMouseY - offset), 0.0F);
-               graphics.pose().scale(scale, scale, 1.0F);
+               graphics.pose().translate((float)(localMouseX - offset), (float)(localMouseY - offset), 200.0F);
+               graphics.pose().scale(scale, scale, scale);
                graphics.renderItem(heldStack, 0, 0);
                graphics.pose().popPose();
+               graphics.flush();
             } else {
-               graphics.fill(localMouseX - offset, localMouseY - offset, localMouseX + offset, localMouseY + offset, -13807798);
-               String initial = this.heldPokemon.species().isEmpty() ? "?" : this.heldPokemon.species().substring(0, 1).toUpperCase(Locale.ROOT);
-               graphics.drawCenteredString(this.font, initial, localMouseX, localMouseY - 4, -10764121);
+               renderSlotPokemon3D(graphics, this.heldPokemon.species(), this.heldPokemon.shiny(), this.heldPokemon.form(), localMouseX - offset, localMouseY - offset, offset * 2);
             }
 
             graphics.pose().pushPose();
@@ -1864,7 +1879,7 @@ final class GuildScreen extends Screen {
             this.renderCard(graphics, cx, cy, cardW, cardH, "INVITACIÓN DE GREMIO PENDIENTE", -10238030);
             graphics.drawString(this.font, "Has recibido una invitación para unirte a un gremio:", cx + 20, cy + 24, -3352620, false);
             int bannerY = cy + 40;
-            graphics.fill(cx + 20, bannerY, cx + cardW - 20, bannerY + 42, -15657192);
+            graphics.fill(cx + 20, bannerY, cx + cardW - 20, bannerY + 42, tintSurface(0x111718, 0.22F, 0xFF));
             this.drawOutline(graphics, cx + 20, bannerY, cardW - 40, 42, accentColor());
             this.drawGuildIcon(graphics, data.icon(), cx + 30, bannerY + 9, 24, accentColor());
             graphics.drawString(this.font, "§l" + data.name(), cx + 64, bannerY + 12, -1, false);
@@ -1888,8 +1903,8 @@ final class GuildScreen extends Screen {
             }
 
             int perksY = headY + 30;
-            graphics.fill(cx + 20, perksY, cx + cardW - 20, perksY + 44, -1726999016);
-            this.drawOutline(graphics, cx + 20, perksY, cardW - 40, 44, -14207946);
+            graphics.fill(cx + 20, perksY, cx + cardW - 20, perksY + 44, tintSurface(0x101518, 0.22F, 0x99));
+            this.drawOutline(graphics, cx + 20, perksY, cardW - 40, 44, tintSurface(0x273436, 0.34F, 0xFF));
             graphics.drawString(this.font, "§eBeneficios de unirte:", cx + 28, perksY + 6, -11940, false);
             graphics.drawString(this.font, "§7• Acceso a la Bóveda compartida y PC de almacenamiento de Pokémon.", cx + 28, perksY + 18, -3352620, false);
             graphics.drawString(
@@ -1901,13 +1916,17 @@ final class GuildScreen extends Screen {
             int formY = cy + 32;
             graphics.drawString(this.font, "Nombre del gremio (2 a 24 caracteres):", cx + 30, formY + 4, -3352620, false);
             graphics.drawString(this.font, "Color identificativo:", cx + 30, formY + 40, -3352620, false);
-            int barW = cardW - 100;
-            this.drawSelectedColor(graphics, cx + 30 + barW + 10, formY + 54, this.draftColor);
+            int barW = cardW - 130;
+            int swatchX = cx + 30 + barW + 12;
+            int swatchY = formY + 52;
+            this.drawSelectedColor(graphics, swatchX, swatchY, this.draftColor);
+            String hexText = "#" + (this.draftColor.startsWith("#") ? this.draftColor.substring(1) : this.draftColor).toUpperCase(Locale.ROOT);
+            graphics.drawString(this.font, hexText, swatchX, swatchY + 26, -3352620, false);
             int prevW = 200;
             int prevX = cx + (cardW - prevW) / 2;
-            int prevY = formY + 98;
+            int prevY = formY + 110;
             graphics.drawString(this.font, "Vista previa del gremio:", prevX, prevY - 12, -7364196, false);
-            graphics.fill(prevX, prevY, prevX + prevW, prevY + 24, -15657192);
+            graphics.fill(prevX, prevY, prevX + prevW, prevY + 24, tintSurface(0x111718, 0.22F, 0xFF));
             this.drawOutline(graphics, prevX, prevY, prevW, 24, accentColor());
             this.drawGuildIcon(graphics, this.draftIcon, prevX + 6, prevY + 3, 18, accentColor());
             graphics.drawString(this.font, this.fit(this.draftName.isBlank() ? "Ej. Antau maldito abandonico!" : this.draftName, prevW - 32), prevX + 28, prevY + 7, -1, false);
@@ -1969,8 +1988,8 @@ final class GuildScreen extends Screen {
          int msgAreaY = chatY + 18;
          int msgAreaW = chatW - 12;
          int msgAreaH = inputY - msgAreaY - 4;
-         graphics.fill(msgAreaX, msgAreaY, msgAreaX + msgAreaW, msgAreaY + msgAreaH, -15657192);
-         this.drawOutline(graphics, msgAreaX, msgAreaY, msgAreaW, msgAreaH, -14010310);
+         graphics.fill(msgAreaX, msgAreaY, msgAreaX + msgAreaW, msgAreaY + msgAreaH, tintSurface(0x111718, 0.22F, 0xFF));
+         this.drawOutline(graphics, msgAreaX, msgAreaY, msgAreaW, msgAreaH, tintSurface(0x2A383A, 0.36F, 0xFF));
          List<String> messages = data.chatMessages();
          int lineHeight = 10;
          int maxLines = Math.max(1, (msgAreaH - 4) / lineHeight);
@@ -2027,7 +2046,7 @@ final class GuildScreen extends Screen {
             GuildScreen.MemberInfo m = filtered.get(this.memberScrollOffset + i);
             int rowY = listTop + i * rowHeight;
             int rowW = this.contentWidth;
-            graphics.fill(this.contentX, rowY, this.contentX + rowW, rowY + rowHeight - 2, -15129819);
+            graphics.fill(this.contentX, rowY, this.contentX + rowW, rowY + rowHeight - 2, tintSurface(0x192125, 0.22F, 0xFF));
             graphics.fill(this.contentX, rowY, this.contentX + 2, rowY + rowHeight - 2, roleColor(m.role));
             PlayerAvatarHelper.drawPlayerHead(graphics, m.uuid, m.name, this.contentX + 6, rowY + 3, 20);
             if (mouseX >= this.contentX + 6 && mouseX < this.contentX + 26 && mouseY >= rowY + 3 && mouseY < rowY + 23) {
@@ -2078,7 +2097,7 @@ final class GuildScreen extends Screen {
             int dropW = this.actionInput.getWidth();
             int itemH = 16;
             int dropH = this.playerSuggestions.size() * itemH + 4;
-            graphics.fill(dropX, dropY, dropX + dropW, dropY + dropH, -183495144);
+            graphics.fill(dropX, dropY, dropX + dropW, dropY + dropH, tintSurface(0x101518, 0.24F, 0xF5));
             this.drawOutline(graphics, dropX, dropY, dropW, dropH, accentColor());
 
             for (int sIdx = 0; sIdx < this.playerSuggestions.size(); sIdx++) {
@@ -2112,8 +2131,8 @@ final class GuildScreen extends Screen {
       graphics.drawString(this.font, "CAJA GREMIO", startX, labelY, accentColor(), false);
       graphics.drawCenteredString(this.font, "EQUIPO", partyX + slotSize / 2, labelY, -10764121);
       graphics.drawCenteredString(this.font, "CAJA PC", privX + cols * slotSize / 2, labelY, -10764121);
-      graphics.fill(startX - 3, gridY - 3, startX + cols * slotSize + 3, gridY + rows * slotSize + 3, -15393248);
-      this.drawOutline(graphics, startX - 3, gridY - 3, cols * slotSize + 6, rows * slotSize + 6, -14010310);
+      graphics.fill(startX - 3, gridY - 3, startX + cols * slotSize + 3, gridY + rows * slotSize + 3, tintSurface(0x151D20, 0.22F, 0xFF));
+      this.drawOutline(graphics, startX - 3, gridY - 3, cols * slotSize + 6, rows * slotSize + 6, tintSurface(0x2A383A, 0.36F, 0xFF));
       List<GuildScreen.PokemonSlotPreview> allPreviews = this.parsePreviews(data);
       Map<Integer, GuildScreen.PokemonSlotPreview> currentBoxSlots = new HashMap<>();
 
@@ -2128,8 +2147,8 @@ final class GuildScreen extends Screen {
             int s = r * cols + c;
             int sx = gridX + c * slotSize;
             int sy = gridY + r * slotSize;
-            graphics.fill(sx, sy, sx + slotSize - 2, sy + slotSize - 2, -14866390);
-            this.drawOutline(graphics, sx, sy, slotSize - 2, slotSize - 2, -13746880);
+            graphics.fill(sx, sy, sx + slotSize - 2, sy + slotSize - 2, tintSurface(0x1D272A, 0.24F, 0xFF));
+            this.drawOutline(graphics, sx, sy, slotSize - 2, slotSize - 2, tintSurface(0x2E3D40, 0.38F, 0xFF));
             boolean isHeld = this.heldPokemon != null
                && "GUILD".equals(this.heldPokemon.container())
                && this.heldPokemon.box() == this.selectedPcBox
@@ -2138,15 +2157,16 @@ final class GuildScreen extends Screen {
             if (px != null && !isHeld) {
                ItemStack stack = getOrCreatePokemonStack(px.species(), px.shiny(), px.form());
                if (!stack.isEmpty()) {
+                  graphics.flush();
+                  RenderSystem.enableDepthTest();
                   graphics.pose().pushPose();
-                  graphics.pose().translate((float)(sx + 2), (float)(sy + 2), 0.0F);
-                  graphics.pose().scale(1.65F, 1.65F, 1.0F);
+                  graphics.pose().translate((float)(sx + 2), (float)(sy + 2), 150.0F);
+                  graphics.pose().scale(1.65F, 1.65F, 1.65F);
                   graphics.renderItem(stack, 0, 0);
                   graphics.pose().popPose();
+                  graphics.flush();
                } else {
-                  graphics.fill(sx + 3, sy + 3, sx + slotSize - 5, sy + slotSize - 5, -13807798);
-                  String initial = px.species().isEmpty() ? "?" : px.species().substring(0, 1).toUpperCase(Locale.ROOT);
-                  graphics.drawCenteredString(this.font, initial, sx + slotSize / 2, sy + (slotSize - 8) / 2, -10764121);
+                  renderSlotPokemon3D(graphics, px.species(), px.shiny(), px.form(), sx + 2, sy + 2, slotSize - 6);
                }
 
                graphics.pose().pushPose();
@@ -2186,13 +2206,13 @@ final class GuildScreen extends Screen {
       }
 
       graphics.drawCenteredString(this.font, partyOccupied + "/6", partyX + slotSize / 2, boxTabY + 5, -6443350);
-      graphics.fill(partyX - 3, gridY - 3, partyX + slotSize + 3, gridY + 6 * slotSize + 3, -15393248);
-      this.drawOutline(graphics, partyX - 3, gridY - 3, slotSize + 6, 6 * slotSize + 6, -14010310);
+      graphics.fill(partyX - 3, gridY - 3, partyX + slotSize + 3, gridY + 6 * slotSize + 3, tintSurface(0x151D20, 0.22F, 0xFF));
+      this.drawOutline(graphics, partyX - 3, gridY - 3, slotSize + 6, 6 * slotSize + 6, tintSurface(0x2A383A, 0.36F, 0xFF));
 
       for (int ix = 0; ix < 6; ix++) {
          int py = gridY + ix * slotSize;
-         graphics.fill(partyX, py, partyX + slotSize - 2, py + slotSize - 2, -14866390);
-         this.drawOutline(graphics, partyX, py, slotSize - 2, slotSize - 2, -13746880);
+         graphics.fill(partyX, py, partyX + slotSize - 2, py + slotSize - 2, tintSurface(0x1D272A, 0.24F, 0xFF));
+         this.drawOutline(graphics, partyX, py, slotSize - 2, slotSize - 2, tintSurface(0x2E3D40, 0.38F, 0xFF));
          boolean isHeldx = this.heldPokemon != null && "PARTY".equals(this.heldPokemon.container()) && this.heldPokemon.slot() == ix;
          if (party != null && !isHeldx) {
             Pokemon pxx = party.get(ix);
@@ -2236,16 +2256,16 @@ final class GuildScreen extends Screen {
       ClientBox clientBox = clientPc != null && privatePcBox < clientPc.getBoxes().size() ? (ClientBox)clientPc.getBoxes().get(privatePcBox) : null;
       int totalPcBoxes = clientPc != null && clientPc.getBoxes().size() > 0 ? clientPc.getBoxes().size() : 1;
       graphics.drawCenteredString(this.font, "Caja " + (privatePcBox + 1) + " / " + totalPcBoxes, privX + cols * slotSize / 2, boxTabY + 5, -1905690);
-      graphics.fill(privX - 3, gridY - 3, privX + cols * slotSize + 3, gridY + rows * slotSize + 3, -15393248);
-      this.drawOutline(graphics, privX - 3, gridY - 3, cols * slotSize + 6, rows * slotSize + 6, -14010310);
+      graphics.fill(privX - 3, gridY - 3, privX + cols * slotSize + 3, gridY + rows * slotSize + 3, tintSurface(0x151D20, 0.22F, 0xFF));
+      this.drawOutline(graphics, privX - 3, gridY - 3, cols * slotSize + 6, rows * slotSize + 6, tintSurface(0x2A383A, 0.36F, 0xFF));
 
       for (int r = 0; r < rows; r++) {
          for (int c = 0; c < cols; c++) {
             int sxx = r * cols + c;
             int sxxx = privX + c * slotSize;
             int syx = gridY + r * slotSize;
-            graphics.fill(sxxx, syx, sxxx + slotSize - 2, syx + slotSize - 2, -14866390);
-            this.drawOutline(graphics, sxxx, syx, slotSize - 2, slotSize - 2, -13746880);
+            graphics.fill(sxxx, syx, sxxx + slotSize - 2, syx + slotSize - 2, tintSurface(0x1D272A, 0.24F, 0xFF));
+            this.drawOutline(graphics, sxxx, syx, slotSize - 2, slotSize - 2, tintSurface(0x2E3D40, 0.38F, 0xFF));
             boolean isHeldxx = this.heldPokemon != null
                && "PC".equals(this.heldPokemon.container())
                && this.heldPokemon.box() == privatePcBox
@@ -2509,13 +2529,15 @@ final class GuildScreen extends Screen {
    private void renderWaypoints(GuiGraphics graphics, GuildSyncPayload data) {
       int halfWidth = (this.contentWidth - 12) / 2;
       int listTop = this.panelY + 70;
-      graphics.drawString(this.font, "MIS WAYPOINTS (XAERO)", this.contentX, listTop, -1774361, false);
+      graphics.drawString(this.font, "MIS WAYPOINTS (XAERO / WAYSTONES)", this.contentX, listTop, -1774361, false);
       graphics.drawString(this.font, "WAYPOINTS COMPARTIDOS", this.contentX + halfWidth + 12, listTop, -1774361, false);
-      graphics.fill(this.contentX, listTop + 13, this.contentX + halfWidth, listTop + 14, -13286331);
-      graphics.fill(this.contentX + halfWidth + 12, listTop + 13, this.contentX + this.contentWidth, listTop + 14, -13286331);
+      graphics.fill(this.contentX, listTop + 13, this.contentX + halfWidth, listTop + 14, tintSurface(0x354445, 0.38F, 0xFF));
+      graphics.fill(this.contentX + halfWidth + 12, listTop + 13, this.contentX + this.contentWidth, listTop + 14, tintSurface(0x354445, 0.38F, 0xFF));
       List<XaeroWaypointBridge.LocalWaypoint> filteredLocal = this.filterLocalWaypoints(this.localWaypoints, this.waypointDimFilter);
       if (filteredLocal.isEmpty()) {
-         String message = XaeroWaypointBridge.isAvailable() ? "Sin waypoints (" + DIM_FILTERS[this.waypointDimFilter] + ")" : "Xaero no detectado";
+         String message = (XaeroWaypointBridge.isAvailable() || WaystonesWaypointBridge.isAvailable())
+            ? "Sin waypoints (" + DIM_FILTERS[this.waypointDimFilter] + ")"
+            : "Ni Xaero ni Waystones detectados";
          graphics.drawString(this.font, message, this.contentX, listTop + 24, -6443350, false);
       }
 
@@ -2595,24 +2617,26 @@ final class GuildScreen extends Screen {
          int badgeY = card1Y + 10;
          int badgeW = 106;
          int badgeH = 28;
-         graphics.fill(badgeX, badgeY, badgeX + badgeW, badgeY + badgeH, -15657192);
+         graphics.fill(badgeX, badgeY, badgeX + badgeW, badgeY + badgeH, tintSurface(0x111718, 0.22F, 0xFF));
          this.drawOutline(graphics, badgeX, badgeY, badgeW, badgeH, accentColor());
          this.drawGuildIcon(graphics, this.draftIcon, badgeX + 4, badgeY + 4, 20, accentColor());
          graphics.drawString(this.font, this.fit(this.draftName.isBlank() ? "Ej. Antau maldito abandonico!" : this.draftName, badgeW - 30), badgeX + 28, badgeY + 10, -1, false);
          int card2Y = card1Y + card1H + 6;
-         int card2H = 54;
+         int card2H = 78;
          this.renderCard(graphics, this.contentX, card2Y, this.contentWidth, card2H, "COLOR DEL GREMIO (SELECTOR VISUAL)", -10238030);
-         int barW = this.contentWidth - 48;
-         int prevBoxX = this.contentX + 10 + barW + 8;
-         int prevBoxY = card2Y + 22;
+         int barW = this.contentWidth - 88;
+         int prevBoxX = this.contentX + 10 + barW + 12;
+         int prevBoxY = card2Y + 20;
          this.drawSelectedColor(graphics, prevBoxX, prevBoxY, this.draftColor);
+         String hexText = "#" + (this.draftColor.startsWith("#") ? this.draftColor.substring(1) : this.draftColor).toUpperCase(Locale.ROOT);
+         graphics.drawString(this.font, hexText, prevBoxX, prevBoxY + 26, -3352620, false);
       } else {
          int cardW = Math.min(360, this.contentWidth - 40);
          int cardH = 100;
          int cx = this.contentX + (this.contentWidth - cardW) / 2;
          int cy = this.panelY + (this.panelHeight - cardH) / 2;
-         graphics.fill(cx, cy, cx + cardW, cy + cardH, -15459298);
-         this.drawOutline(graphics, cx, cy, cardW, cardH, -14010052);
+         graphics.fill(cx, cy, cx + cardW, cy + cardH, tintSurface(0x141B1E, 0.20F, 0xFF));
+         this.drawOutline(graphics, cx, cy, cardW, cardH, tintSurface(0x2A393C, 0.34F, 0xFF));
          graphics.drawCenteredString(this.font, "\ud83d\udd12 ACCESO RESTRINGIDO", cx + cardW / 2, cy + 24, -2069387);
          graphics.drawCenteredString(this.font, "Solo el líder del gremio tiene permisos para", cx + cardW / 2, cy + 44, -3352620);
          graphics.drawCenteredString(this.font, "modificar el nombre y el color del gremio.", cx + cardW / 2, cy + 58, -6443350);
@@ -2620,8 +2644,8 @@ final class GuildScreen extends Screen {
    }
 
    private void renderCard(GuiGraphics graphics, int x, int y, int width, int height, String title, int titleColor) {
-      graphics.fill(x, y, x + width, y + height, -15261662);
-      this.drawOutline(graphics, x, y, width, height, -14010310);
+      graphics.fill(x, y, x + width, y + height, tintSurface(0x171F22, 0.22F, 0xFF));
+      this.drawOutline(graphics, x, y, width, height, tintSurface(0x2A383A, 0.36F, 0xFF));
       graphics.drawString(this.font, this.fit(title, width - 16), x + 8, y + 8, titleColor, false);
    }
 
@@ -2636,7 +2660,7 @@ final class GuildScreen extends Screen {
       int color = roleColor(role);
       String label = roleLabel(role).toUpperCase();
       int pillW = this.font.width(label) + 8;
-      graphics.fill(x, y, x + pillW, y + 13, -14405839);
+      graphics.fill(x, y, x + pillW, y + 13, tintSurface(0x242F31, 0.28F, 0xFF));
       this.drawOutline(graphics, x, y, pillW, 13, color);
       graphics.drawString(this.font, label, x + 4, y + 3, color, false);
    }
@@ -2649,7 +2673,7 @@ final class GuildScreen extends Screen {
       };
    }
 
-   private static int tintSurface(int baseRgb, float mix, int alpha) {
+   static int tintSurface(int baseRgb, float mix, int alpha) {
       int acc = accentColor();
       int br = (baseRgb >> 16) & 0xFF;
       int bg = (baseRgb >> 8) & 0xFF;
@@ -2758,49 +2782,56 @@ final class GuildScreen extends Screen {
             "............"
          };
          default -> new String[]{
-            "...OOOOOO...",
-            "..OLLLLAAO..",
-            ".OLWLLAAAAO.",
-            ".OLWAAAAAAO.",
-            ".OAAAAAAAAO.",
-            "OOOOOOOOOOOO",
-            "OOOOOWWOOOOO",
-            ".OSWWOOWWSO.",
-            ".OSWWWWWWWO.",
-            ".OSSWWWWWSO.",
-            "..OSSSSSSO..",
-            "...OOOOOO..."
+            ".....OOOOOO.....",
+            "...OOLLLLAAOO...",
+            "..OLLHHAAAAADO..",
+            ".OLHHAAAAAAADDO.",
+            ".OLHAAAAAAAADDO.",
+            "OAAAAAAAAAAADDDO",
+            "OAAADDDDDDDDAAAO",
+            "OOOOOOOWWOOOOOOO",
+            "OOOOOOWBBWOOOOOO",
+            "OSSSSOOWWOOSSSSO",
+            ".OSSSSOOOOSSSSO.",
+            ".OSSSSSSSSSSSSO.",
+            "..OSSSSSSSSSSO..",
+            "...OSSSSSSSSO...",
+            ".....OOOOOO.....",
+            "................"
          };
       };
    }
 
    private void drawGuildIcon(GuiGraphics graphics, String icon, int x, int y, int size, int color) {
-      graphics.fill(x, y, x + size, y + size, 0xFF121720);
-      this.drawOutline(graphics, x, y, size, size, blendColor(color, 0.72F));
+      graphics.fill(x, y, x + size, y + size, tintSurface(0x121720, 0.26F, 0xFF));
+      this.drawOutline(graphics, x, y, size, size, blendColor(color, 0.78F));
       String[] sprite = guildIconSprite(icon);
+      int grid = sprite.length;
       int pad = size >= 20 ? 2 : 1;
-      int inner = Math.max(12, size - pad * 2);
-      int light = blendColor(color, 1.28F);
-      int dark = blendColor(color, 0.62F);
+      int inner = Math.max(grid, size - pad * 2);
+      int light = blendColor(color, 1.30F);
+      int dark = blendColor(color, 0.58F);
 
-      for (int row = 0; row < 12; row++) {
+      for (int row = 0; row < grid; row++) {
          String line = sprite[row];
-         int py1 = y + pad + (row * inner) / 12;
-         int py2 = y + pad + ((row + 1) * inner) / 12;
+         int py1 = y + pad + (row * inner) / grid;
+         int py2 = y + pad + ((row + 1) * inner) / grid;
          if (py2 <= py1) py2 = py1 + 1;
-         for (int col = 0; col < 12; col++) {
+         for (int col = 0; col < grid; col++) {
             char c = line.charAt(col);
             if (c == '.') continue;
-            int px1 = x + pad + (col * inner) / 12;
-            int px2 = x + pad + ((col + 1) * inner) / 12;
+            int px1 = x + pad + (col * inner) / grid;
+            int px2 = x + pad + ((col + 1) * inner) / grid;
             if (px2 <= px1) px2 = px1 + 1;
             int pxColor = switch (c) {
-               case 'O' -> 0xFF0B0E14;
+               case 'O' -> 0xFF0A0D14;
                case 'A' -> 0xFF000000 | (color & 0xFFFFFF);
                case 'L' -> light;
                case 'D' -> dark;
+               case 'H' -> 0xFFF8FAFC;
+               case 'B' -> 0xFFE2E8F0;
                case 'W' -> 0xFFFFFFFF;
-               case 'S' -> 0xFFD0D7E2;
+               case 'S' -> 0xFFC5CEDC;
                case 'G' -> 0xFFF5B72F;
                case 'R' -> 0xFFE63946;
                default -> 0xFF000000 | (color & 0xFFFFFF);
@@ -2838,8 +2869,65 @@ final class GuildScreen extends Screen {
    }
 
    private void drawSelectedColor(GuiGraphics graphics, int x, int y, String hex) {
-      graphics.fill(x, y, x + 20, y + 20, -1);
-      graphics.fill(x + 2, y + 2, x + 18, y + 18, 0xFF000000 | GuildClientState.parseColor(hex.startsWith("#") ? hex : "#" + hex));
+      graphics.fill(x, y, x + 20, y + 20, -10724259);
+      graphics.fill(x + 1, y + 1, x + 19, y + 19, 0xFF3A4048);
+      int raw = GuildClientState.parseColor(hex.startsWith("#") ? hex : "#" + hex);
+      graphics.fill(x + 2, y + 2, x + 18, y + 18, softenWithGray(raw));
+   }
+
+   private static void renderSlotPokemon3D(GuiGraphics graphics, String species, boolean shiny, String form, int x, int y, int size) {
+      try {
+         String clean = species == null ? "" : species.toLowerCase(Locale.ROOT).replace(" ", "_");
+         String shortName = clean.contains(":") ? clean.substring(clean.indexOf(':') + 1) : clean;
+         Species speciesObj = PokemonSpecies.getByName(shortName);
+         if (speciesObj == null) {
+            speciesObj = PokemonSpecies.getByIdentifier(ResourceLocation.tryParse("cobblemon:" + shortName));
+         }
+         if (speciesObj == null) {
+            speciesObj = PokemonSpecies.getByIdentifier(ResourceLocation.tryParse(clean));
+         }
+         if (speciesObj != null) {
+            Set<String> aspects = new HashSet<>();
+            if (shiny) aspects.add("shiny");
+            if (form != null && !form.isBlank() && !form.equalsIgnoreCase("normal") && !form.equalsIgnoreCase("standard")) {
+               for (String part : form.trim().split("[\\s,]+")) {
+                  String lower = part.toLowerCase(Locale.ROOT);
+                  if (!lower.equals("normal") && !lower.equals("standard")) aspects.add(lower);
+               }
+            }
+            FloatingState state = new FloatingState();
+            state.setCurrentAspects(aspects);
+            graphics.flush();
+            RenderSystem.enableDepthTest();
+            graphics.pose().pushPose();
+            graphics.pose().translate(x + size / 2.0, y + size / 2.0 + 4.0, 250.0);
+            Quaternionf rot = new Quaternionf().rotationXYZ((float)Math.toRadians(12.0), (float)Math.toRadians(35.0), 0.0f);
+            PokemonGuiUtilsKt.drawProfilePokemon(
+               new RenderablePokemon(speciesObj, aspects, ItemStack.EMPTY),
+               graphics.pose(),
+               rot,
+               PoseType.PROFILE,
+               state,
+               0.0f,
+               Math.max(8.0f, size * 0.45f),
+               ProfileTransformType.PROFILE,
+               true,
+               1.0f,
+               1.0f,
+               1.0f,
+               1.0f,
+               0.0f,
+               0.0f,
+               15728880
+            );
+            graphics.pose().popPose();
+            graphics.flush();
+            return;
+         }
+      } catch (Throwable ignored) {}
+      graphics.fill(x + 1, y + 1, x + size - 1, y + size - 1, -13807798);
+      String initial = species == null || species.isEmpty() ? "?" : species.substring(0, 1).toUpperCase(Locale.ROOT);
+      graphics.drawCenteredString(net.minecraft.client.Minecraft.getInstance().font, initial, x + size / 2, y + (size - 8) / 2, -10764121);
    }
 
    private float openingProgress() {
@@ -3494,8 +3582,17 @@ final class GuildScreen extends Screen {
       }
    }
 
+   private String lastSyncedRole = "";
+
    void onSyncUpdated() {
       if (this.minecraft != null && this.minecraft.screen == this) {
+         String newRole = GuildClientState.data.role() != null ? GuildClientState.data.role() : "";
+         boolean roleChanged = !Objects.equals(this.lastSyncedRole, newRole);
+         this.lastSyncedRole = newRole;
+         if (roleChanged && "LEADER".equals(newRole)) {
+            this.draftName = "";
+         }
+
          if (this.pendingVaultOps > 0) {
             this.pendingVaultOps--;
          }
@@ -3504,16 +3601,10 @@ final class GuildScreen extends Screen {
             this.validateHeldVaultItem();
          }
 
-         if (this.tab == 3) {
-            return;
-         }
-
-         if (this.tab == 6) {
-            return;
-         }
-
-         if (this.getFocused() instanceof EditBox) {
-            return;
+         if (!roleChanged) {
+            if (this.tab == 3 || this.tab == 6 || this.getFocused() instanceof EditBox) {
+               return;
+            }
          }
 
          this.rebuildWidgets();
@@ -3713,15 +3804,22 @@ final class GuildScreen extends Screen {
       graphics.blit(texture, drawX, drawY, drawWidth, drawHeight, (float)sourceX, (float)sourceY, sourceWidth, sourceHeight, 512, 512);
    }
 
-   private static int accentColor() {
-      return !GuildClientState.data.member() ? -10764121 : 0xFF000000 | GuildClientState.parseColor(GuildClientState.data.color());
+   private static int softenWithGray(int rgb) {
+      int r = (((rgb >> 16) & 0xFF) * 60 + 58 * 40) / 100;
+      int g = (((rgb >> 8) & 0xFF) * 60 + 64 * 40) / 100;
+      int b = ((rgb & 0xFF) * 60 + 72 * 40) / 100;
+      return 0xFF000000 | (r << 16) | (g << 8) | b;
    }
 
-   private static int accentSurface() {
+   static int accentColor() {
+      return !GuildClientState.data.member() ? -10764121 : softenWithGray(GuildClientState.parseColor(GuildClientState.data.color()));
+   }
+
+   static int accentSurface() {
       int accent = accentColor();
-      int red = (accent >> 16 & 0xFF) * 2 / 5 + 15;
-      int green = (accent >> 8 & 0xFF) * 2 / 5 + 21;
-      int blue = (accent & 0xFF) * 2 / 5 + 21;
+      int red = (accent >> 16 & 0xFF) * 35 / 100 + 36;
+      int green = (accent >> 8 & 0xFF) * 35 / 100 + 40;
+      int blue = (accent & 0xFF) * 35 / 100 + 44;
       return 0xFF000000 | red << 16 | green << 8 | blue;
    }
 
@@ -3738,8 +3836,8 @@ final class GuildScreen extends Screen {
       protected void renderWidget(GuiGraphics graphics, int mouseX, int mouseY, float delta) {
          int background = this.accent
             ? (this.isHovered() ? GuildScreen.accentColor() : GuildScreen.accentSurface())
-            : (this.isHovered() ? -13352124 : -14405583);
-         int border = this.accent ? GuildScreen.accentColor() : (this.isHovered() ? -10849681 : -12956852);
+            : (this.isHovered() ? GuildScreen.tintSurface(0x344344, 0.34F, 0xFF) : GuildScreen.tintSurface(0x242F31, 0.28F, 0xFF));
+         int border = this.accent ? GuildScreen.accentColor() : (this.isHovered() ? GuildScreen.tintSurface(0x5A736F, 0.48F, 0xFF) : GuildScreen.tintSurface(0x3A4A4C, 0.38F, 0xFF));
          graphics.fill(this.getX(), this.getY(), this.getX() + this.width, this.getY() + this.height, background);
          GuildScreen.this.drawOutline(graphics, this.getX(), this.getY(), this.width, this.height, border);
          String label = this.getMessage().getString();
@@ -3781,17 +3879,25 @@ final class GuildScreen extends Screen {
       }
 
       protected void renderWidget(GuiGraphics graphics, int mouseX, int mouseY, float delta) {
-         int bg = this.isHovered() ? this.hoverColor : -14340046;
+         int bg = this.isHovered() ? this.hoverColor : GuildScreen.tintSurface(0x252F32, 0.28F, 0xFF);
          graphics.fill(this.getX(), this.getY(), this.getX() + this.width, this.getY() + this.height, bg);
-         GuildScreen.this.drawOutline(graphics, this.getX(), this.getY(), this.width, this.height, this.isHovered() ? -1 : -12693679);
-         graphics.drawString(
-            GuildScreen.this.font,
-            this.getMessage(),
-            this.getX() + (this.width - GuildScreen.this.font.width(this.getMessage())) / 2,
-            this.getY() + (this.height - 8) / 2,
-            -1,
-            false
-         );
+         GuildScreen.this.drawOutline(graphics, this.getX(), this.getY(), this.width, this.height, this.isHovered() ? -1 : GuildScreen.tintSurface(0x3E4D51, 0.40F, 0xFF));
+         if ("⎋".equals(this.getMessage().getString())) {
+            ResourceLocation exitTex = ResourceLocation.fromNamespaceAndPath("desgraciamon_guilds", "textures/gui/icons/exit-guild.png");
+            RenderSystem.enableBlend();
+            graphics.setColor(1.0F, 1.0F, 1.0F, 1.0F);
+            graphics.blit(exitTex, this.getX() + (this.width - 16) / 2, this.getY() + (this.height - 16) / 2, 16, 16, 0.0F, 0.0F, 16, 16, 16, 16);
+            RenderSystem.disableBlend();
+         } else {
+            graphics.drawString(
+               GuildScreen.this.font,
+               this.getMessage(),
+               this.getX() + (this.width - GuildScreen.this.font.width(this.getMessage())) / 2,
+               this.getY() + (this.height - 8) / 2,
+               -1,
+               false
+            );
+         }
       }
 
       public void playDownSound(SoundManager soundManager) {
@@ -3826,64 +3932,114 @@ final class GuildScreen extends Screen {
 
    private final class HueBarWidget extends AbstractWidget {
       private final Consumer<String> onColorSelected;
-      private boolean dragging = false;
+      private int dragMode = 0; // 0=none, 1=SV box, 2=Hue bar
+      private float currentHue = 0.55F;
+      private float currentSat = 0.75F;
+      private float currentBri = 0.85F;
 
       private HueBarWidget(int x, int y, int width, int height, Consumer<String> onColorSelected) {
          super(x, y, width, height, Component.literal("Selector de Color"));
          this.onColorSelected = onColorSelected;
-         this.setTooltip(Tooltip.create(Component.literal("Selector de Color Visual")));
+         this.setTooltip(Tooltip.create(Component.literal("Cuadro Hex: elige tono, saturación y brillo")));
+         syncFromDraft();
+      }
+
+      private void syncFromDraft() {
+         try {
+            int c = Integer.parseInt(GuildScreen.this.draftColor.replace("#", ""), 16);
+            float[] hsb = Color.RGBtoHSB((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF, null);
+            this.currentHue = hsb[0];
+            this.currentSat = hsb[1];
+            this.currentBri = hsb[2];
+         } catch (Exception ignored) {}
+      }
+
+      private int hueBarHeight() {
+         return Math.max(8, Math.min(10, this.height / 4));
+      }
+
+      private int svBoxHeight() {
+         return Math.max(12, this.height - hueBarHeight() - 4);
       }
 
       protected void renderWidget(GuiGraphics graphics, int mouseX, int mouseY, float delta) {
-         for (int i = 0; i < this.width; i++) {
-            float hue = (float)i / (float)this.width;
-            int rgb = Color.HSBtoRGB(hue, 0.85F, 0.95F) & 16777215;
-            graphics.fill(this.getX() + i, this.getY(), this.getX() + i + 1, this.getY() + this.height, 0xFF000000 | rgb);
-         }
+         int svH = svBoxHeight();
+         int hueY = this.getY() + svH + 4;
+         int hueH = hueBarHeight();
 
-         GuildScreen.this.drawOutline(graphics, this.getX() - 1, this.getY() - 1, this.width + 2, this.height + 2, this.isHovered() ? -1 : -13286330);
-
-         try {
-            int c = Integer.parseInt(GuildScreen.this.draftColor.replace("#", ""), 16);
-            float[] hsb = Color.RGBtoHSB(c >> 16 & 0xFF, c >> 8 & 0xFF, c & 0xFF, null);
-            int indX = this.getX() + (int)(hsb[0] * (float)(this.width - 1));
-            if (indX >= this.getX() && indX <= this.getX() + this.width) {
-               graphics.fill(indX - 1, this.getY() - 3, indX + 2, this.getY() + this.height + 3, -1);
-               graphics.fill(indX, this.getY() - 2, indX + 1, this.getY() + this.height + 2, -15722471);
+         // 1. Cuadro 2D de Saturación (X) y Brillo (Y)
+         int stepX = Math.max(2, this.width / 48);
+         int stepY = Math.max(2, svH / 16);
+         for (int px = 0; px < this.width; px += stepX) {
+            float s = (float)px / (float)Math.max(1, this.width - 1);
+            int w = Math.min(stepX, this.width - px);
+            for (int py = 0; py < svH; py += stepY) {
+               float b = 1.0F - (float)py / (float)Math.max(1, svH - 1);
+               int h = Math.min(stepY, svH - py);
+               int rgb = Color.HSBtoRGB(this.currentHue, s, b) & 0xFFFFFF;
+               graphics.fill(this.getX() + px, this.getY() + py, this.getX() + px + w, this.getY() + py + h, 0xFF000000 | rgb);
             }
-         } catch (Exception var8) {
          }
+         GuildScreen.this.drawOutline(graphics, this.getX() - 1, this.getY() - 1, this.width + 2, svH + 2, 0xFF4A5058);
+
+         // Cursor en cuadro SV
+         int curX = this.getX() + (int)(this.currentSat * (this.width - 1));
+         int curY = this.getY() + (int)((1.0F - this.currentBri) * (svH - 1));
+         graphics.fill(curX - 2, curY - 2, curX + 3, curY + 3, 0xFFFFFFFF);
+         graphics.fill(curX - 1, curY - 1, curX + 2, curY + 2, 0xFF000000);
+
+         // 2. Barra arcoíris de Hue debajo
+         for (int i = 0; i < this.width; i++) {
+            float hue = (float)i / (float)Math.max(1, this.width - 1);
+            int rgb = Color.HSBtoRGB(hue, 1.0F, 1.0F) & 0xFFFFFF;
+            graphics.fill(this.getX() + i, hueY, this.getX() + i + 1, hueY + hueH, 0xFF000000 | rgb);
+         }
+         GuildScreen.this.drawOutline(graphics, this.getX() - 1, hueY - 1, this.width + 2, hueH + 2, 0xFF4A5058);
+
+         int indX = this.getX() + (int)(this.currentHue * (this.width - 1));
+         graphics.fill(indX - 1, hueY - 2, indX + 2, hueY + hueH + 2, 0xFFFFFFFF);
+         graphics.fill(indX, hueY - 1, indX + 1, hueY + hueH + 1, 0xFF101010);
       }
 
       public boolean mouseClicked(double mouseX, double mouseY, int button) {
          if (this.active && this.visible && this.isValidClickButton(button) && this.clicked(mouseX, mouseY)) {
-            this.dragging = true;
+            int svH = svBoxHeight();
+            this.dragMode = (mouseY < this.getY() + svH + 2) ? 1 : 2;
             GuildUiSound.play();
-            this.pickHue(mouseX);
+            this.applyPick(mouseX, mouseY);
             return true;
-         } else {
-            return false;
          }
+         return false;
       }
 
       public boolean mouseReleased(double mouseX, double mouseY, int button) {
-         this.dragging = false;
+         this.dragMode = 0;
          return super.mouseReleased(mouseX, mouseY, button);
       }
 
       public boolean mouseDragged(double mouseX, double mouseY, int button, double dragX, double dragY) {
-         if (!this.dragging && !this.clicked(mouseX, mouseY)) {
+         if (this.dragMode == 0 && !this.clicked(mouseX, mouseY)) {
             return false;
-         } else {
-            this.pickHue(mouseX);
-            return true;
          }
+         if (this.dragMode == 0) {
+            int svH = svBoxHeight();
+            this.dragMode = (mouseY < this.getY() + svH + 2) ? 1 : 2;
+         }
+         this.applyPick(mouseX, mouseY);
+         return true;
       }
 
-      private void pickHue(double mouseX) {
-         float rel = (float)(mouseX - (double)this.getX()) / (float)this.width;
-         rel = Math.max(0.0F, Math.min(1.0F, rel));
-         int rgb = Color.HSBtoRGB(rel, 0.85F, 0.95F) & 16777215;
+      private void applyPick(double mouseX, double mouseY) {
+         float relX = Math.max(0.0F, Math.min(1.0F, (float)(mouseX - this.getX()) / (float)Math.max(1, this.width - 1)));
+         if (this.dragMode == 2) {
+            this.currentHue = relX;
+         } else {
+            int svH = svBoxHeight();
+            float relY = Math.max(0.0F, Math.min(1.0F, (float)(mouseY - this.getY()) / (float)Math.max(1, svH - 1)));
+            this.currentSat = relX;
+            this.currentBri = 1.0F - relY;
+         }
+         int rgb = Color.HSBtoRGB(this.currentHue, this.currentSat, this.currentBri) & 0xFFFFFF;
          String hex = String.format("%06X", rgb);
          GuildScreen.this.draftColor = hex;
          this.onColorSelected.accept(hex);
@@ -4054,7 +4210,7 @@ final class GuildScreen extends Screen {
          if (this.selected) {
             graphics.fill(this.getX() + 1, this.getY() + 1, this.getX() + 3, this.getY() + this.height - 1, GuildScreen.accentColor());
          }
-         int iconSize = 20;
+         int iconSize = 16;
          int iconX = this.getX() + (this.width - iconSize) / 2;
          int iconY = this.getY() + (this.height - iconSize) / 2;
          RenderSystem.enableBlend();
@@ -4065,7 +4221,7 @@ final class GuildScreen extends Screen {
          } else {
             graphics.setColor(0.68F, 0.74F, 0.84F, 1.0F);
          }
-         graphics.blit(GuildScreen.icon(this.icon), iconX, iconY, iconSize, iconSize, 0.0F, 0.0F, 32, 32, 32, 32);
+         graphics.blit(GuildScreen.icon(this.icon), iconX, iconY, iconSize, iconSize, 0.0F, 0.0F, 16, 16, 16, 16);
          graphics.setColor(1.0F, 1.0F, 1.0F, 1.0F);
          RenderSystem.disableBlend();
       }
@@ -4097,9 +4253,13 @@ final class GuildScreen extends Screen {
 
       protected void renderWidget(GuiGraphics graphics, int mouseX, int mouseY, float delta) {
          boolean selected = this.iconKey.equalsIgnoreCase(GuildScreen.this.draftIcon);
-         int bgColor = selected ? -14009028 : (this.isHovered() ? -14536911 : -15327198);
+         int bgColor = selected
+            ? GuildScreen.accentSurface()
+            : (this.isHovered() ? GuildScreen.tintSurface(0x222D31, 0.30F, 0xFF) : GuildScreen.tintSurface(0x161E22, 0.22F, 0xFF));
          graphics.fill(this.getX(), this.getY(), this.getX() + this.width, this.getY() + this.height, bgColor);
-         int borderColor = selected ? GuildScreen.accentColor() : (this.isHovered() ? -9795966 : -13944517);
+         int borderColor = selected
+            ? GuildScreen.accentColor()
+            : (this.isHovered() ? GuildScreen.tintSurface(0x6A8682, 0.45F, 0xFF) : GuildScreen.tintSurface(0x2B373B, 0.36F, 0xFF));
          GuildScreen.this.drawOutline(graphics, this.getX(), this.getY(), this.width, this.height, borderColor);
          int iconColor = selected ? GuildScreen.accentColor() : (this.isHovered() ? -1642262 : -7363682);
          int iconSize = this.width - 6;
@@ -4143,9 +4303,11 @@ final class GuildScreen extends Screen {
       }
 
       protected void renderWidget(GuiGraphics graphics, int mouseX, int mouseY, float delta) {
-         int bg = this.isHovered() ? -12759215 : -14537426;
+         int bg = this.isHovered() ? GuildScreen.tintSurface(0x3D4F51, 0.36F, 0xFF) : GuildScreen.tintSurface(0x222D2E, 0.28F, 0xFF);
          graphics.fill(this.getX(), this.getY(), this.getX() + this.width, this.getY() + this.height, bg);
-         GuildScreen.this.drawOutline(graphics, this.getX(), this.getY(), this.width, this.height, this.isHovered() ? GuildScreen.accentColor() : -13286330);
+         GuildScreen.this.drawOutline(
+            graphics, this.getX(), this.getY(), this.width, this.height, this.isHovered() ? GuildScreen.accentColor() : GuildScreen.tintSurface(0x354446, 0.38F, 0xFF)
+         );
          graphics.drawString(
             GuildScreen.this.font,
             this.getMessage(),
@@ -4183,7 +4345,7 @@ final class GuildScreen extends Screen {
       }
 
       protected void renderWidget(GuiGraphics graphics, int mouseX, int mouseY, float delta) {
-         int bg = this.isHovered() ? this.btnColor : -14537168;
+         int bg = this.isHovered() ? this.btnColor : GuildScreen.tintSurface(0x222E30, 0.28F, 0xFF);
          graphics.fill(this.getX(), this.getY(), this.getX() + this.width, this.getY() + this.height, bg);
          GuildScreen.this.drawOutline(graphics, this.getX(), this.getY(), this.width, this.height, this.isHovered() ? -1 : this.btnColor);
          int textCol = this.isHovered() ? -1 : this.btnColor;
@@ -4217,10 +4379,17 @@ final class GuildScreen extends Screen {
       }
 
       protected void renderWidget(GuiGraphics graphics, int mouseX, int mouseY, float delta) {
-         int background = this.selected ? GuildScreen.accentSurface() : (this.isHovered() ? -14339274 : -15261148);
+         int background = this.selected
+            ? GuildScreen.accentSurface()
+            : (this.isHovered() ? GuildScreen.tintSurface(0x252E36, 0.30F, 0xFF) : GuildScreen.tintSurface(0x172024, 0.22F, 0xFF));
          graphics.fill(this.getX(), this.getY(), this.getX() + this.width, this.getY() + this.height, background);
          GuildScreen.this.drawOutline(
-            graphics, this.getX(), this.getY(), this.width, this.height, this.selected ? GuildScreen.accentColor() : (this.isHovered() ? -11837599 : -13746881)
+            graphics,
+            this.getX(),
+            this.getY(),
+            this.width,
+            this.height,
+            this.selected ? GuildScreen.accentColor() : (this.isHovered() ? GuildScreen.tintSurface(0x4B6061, 0.42F, 0xFF) : GuildScreen.tintSurface(0x2E3D3F, 0.36F, 0xFF))
          );
          int dimColor = -13381254;
          String lowerDetail = this.detail.toLowerCase(Locale.ROOT);

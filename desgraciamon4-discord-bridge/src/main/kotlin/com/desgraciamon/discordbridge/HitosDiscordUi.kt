@@ -26,6 +26,9 @@ object HitosDiscordUi {
 
     fun canManageHitos(member: Member?, config: DiscordBridgeConfig, forRoleChange: Boolean = false): Boolean {
         if (member == null) return false
+        if (config.hasConfiguredAdminUsers()) {
+            return config.isAdminUser(member.id)
+        }
         val roleId = HitosDiscordHelper.getHitosRoleId(config)
         if (forRoleChange) {
             return member.hasPermission(Permission.ADMINISTRATOR) ||
@@ -38,6 +41,9 @@ object HitosDiscordUi {
     }
 
     fun permissionError(config: DiscordBridgeConfig, forRoleChange: Boolean = false): String {
+        if (config.hasConfiguredAdminUsers()) {
+            return "Solo los usuarios administradores configurados por ID pueden usar comandos de administración."
+        }
         val roleId = HitosDiscordHelper.getHitosRoleId(config)
         if (forRoleChange) {
             return if (roleId.isNotBlank()) {

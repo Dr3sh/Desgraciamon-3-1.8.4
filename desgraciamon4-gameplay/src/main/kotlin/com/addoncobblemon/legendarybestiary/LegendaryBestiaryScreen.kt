@@ -7,7 +7,6 @@ import com.cobblemon.mod.common.api.types.ElementalType
 import com.cobblemon.mod.common.client.gui.ProfileTransformType
 import com.cobblemon.mod.common.client.gui.drawProfilePokemon
 import com.cobblemon.mod.common.client.render.models.blockbench.FloatingState
-import com.cobblemon.mod.common.client.render.models.blockbench.repository.VaryingModelRepository
 import com.cobblemon.mod.common.entity.PoseType
 import com.cobblemon.mod.common.pokemon.Pokemon
 import com.cobblemon.mod.common.pokemon.RenderablePokemon
@@ -526,40 +525,33 @@ class LegendaryBestiaryScreen : Screen(TextCatalog.component("screen.title")) {
             val modelAreaTop = viewportY + 26
             val modelAreaBottom = viewportY + viewportHeight - 12
             val modelAreaH = modelAreaBottom - modelAreaTop
-            val modelCenterY = modelAreaTop + modelAreaH / 2f
             val modelCenterX = viewportX + viewportWidth / 2f
+            val modelTranslateY = modelAreaTop + modelAreaH * 0.14f
 
+            guiGraphics.flush()
+            com.mojang.blaze3d.systems.RenderSystem.enableDepthTest()
             enableScaledScissor(
                 guiGraphics,
                 viewportX + 2,
-                modelAreaTop,
+                viewportY + 2,
                 viewportX + viewportWidth - 2,
-                modelAreaBottom
+                viewportY + viewportHeight - 2
             )
             try {
                 val aspectsToRender = currentAspects.ifEmpty { pokemon.aspects }
                 state.currentAspects = aspectsToRender
 
-                // Query poser to obtain calibrated profile scale
-                val poser = runCatching {
-                    VaryingModelRepository.getPoser(pokemon.species.resourceIdentifier, state)
-                }.getOrNull()
-
-                val pScale = poser?.profileScale?.takeIf { it > 0.01f } ?: 0.40f
-
-                // Dynamic adaptive scale: cleanly fits ~55% of the viewing box
-                val targetPixelSize = modelAreaH * 0.55f
-                val baseScale = ((targetPixelSize * 0.40f) / pScale).coerceIn(10.0f, 34.0f)
+                val baseScale = (modelAreaH * 0.28f).coerceIn(28.0f, 42.0f)
 
                 val matrices = guiGraphics.pose()
                 matrices.pushPose()
 
-                // Translate to model viewport center and apply bounded zoom
-                matrices.translate(modelCenterX.toDouble(), modelCenterY.toDouble(), 150.0)
-                matrices.scale(modelZoom, modelZoom, 1.0f)
+                // Translate near top of model area (drawProfilePokemon shifts downward by ~1.5 * profileScale * scale)
+                matrices.translate(modelCenterX.toDouble(), modelTranslateY.toDouble(), 150.0)
+                matrices.scale(1.0f, 1.0f, uiScale)
 
                 val rotation = Quaternionf().rotationXYZ(
-                    Math.toRadians(12.0).toFloat(),
+                    Math.toRadians(13.0).toFloat(),
                     Math.toRadians(rotationY.toDouble()).toFloat(),
                     0f
                 )
@@ -571,14 +563,14 @@ class LegendaryBestiaryScreen : Screen(TextCatalog.component("screen.title")) {
                     poseType = PoseType.PROFILE,
                     state = state,
                     partialTicks = partialTick,
-                    scale = baseScale,
-                    profileTransformType = ProfileTransformType.PROFILE
+                    scale = baseScale * modelZoom,
+                    profileTransformType = ProfileTransformType.SUMMARY
                 )
 
                 matrices.popPose()
                 guiGraphics.flush()
-            } catch (_: Throwable) {
-                // Graceful fallback
+            } catch (t: Throwable) {
+                org.slf4j.LoggerFactory.getLogger("legendary-bestiary").error("Error rendering 3D legendary ${pokemon.species.resourceIdentifier}", t)
             } finally {
                 guiGraphics.disableScissor()
             }

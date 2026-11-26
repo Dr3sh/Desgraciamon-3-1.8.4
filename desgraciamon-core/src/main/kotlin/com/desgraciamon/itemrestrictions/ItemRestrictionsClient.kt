@@ -11,8 +11,10 @@ import net.minecraft.world.item.ItemStack
 class ItemRestrictionsClient : ClientModInitializer {
 
     override fun onInitializeClient() {
-        ClientPlayNetworking.registerGlobalReceiver(ItemRestrictionsSyncPayload.TYPE) { payload, _ ->
-            update(payload.restrictedItems.toSet(), payload.restrictedTags, payload.activeForPlayer)
+        ClientPlayNetworking.registerGlobalReceiver(ItemRestrictionsSyncPayload.TYPE) { payload, context ->
+            context.client().execute {
+                update(payload.restrictedItems.toSet(), payload.restrictedTags, payload.activeForPlayer)
+            }
         }
         net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents.DISCONNECT.register { _, _ ->
             update(emptySet(), emptyList(), false)

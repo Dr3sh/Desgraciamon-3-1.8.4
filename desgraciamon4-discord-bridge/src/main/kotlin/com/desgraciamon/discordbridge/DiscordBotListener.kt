@@ -128,14 +128,12 @@ class DiscordBotListener(private val config: DiscordBridgeConfig) : ListenerAdap
                     }
                     LinkResult.INVALID_OR_EXPIRED -> TextCatalog.string("discord.code_invalid")
                     LinkResult.DISCORD_ALREADY_LINKED -> TextCatalog.string("discord.already_linked")
+                    LinkResult.MINECRAFT_ALREADY_LINKED -> "Esta cuenta de Minecraft ya está vinculada a otro usuario de Discord (la vinculación es permanente 1 a 1)."
                 }
                 event.reply(message).setEphemeral(true).queue()
             }
             "desvincular" -> {
-                val removed = data.unlinkDiscord(event.user.id)
-                val message = removed?.let { TextCatalog.string("discord.unlinked", "player" to it) }
-                    ?: TextCatalog.string("discord.not_linked")
-                event.reply(message).setEphemeral(true).queue()
+                event.reply("La vinculación entre Discord y Minecraft es permanente (1 a 1). Si hubo un error, contacta a un administrador.").setEphemeral(true).queue()
             }
             else -> event.reply(TextCatalog.string("discord.unknown_command")).setEphemeral(true).queue()
         }
@@ -202,22 +200,60 @@ class DiscordBotListener(private val config: DiscordBridgeConfig) : ListenerAdap
 
                     val message = when (event.name) {
                         "legendarios" -> {
-                            if (playerId == null) {
-                                TextCatalog.string("discord.player_not_linked", "player" to user.effectiveName)
-                            } else {
-                                val pokemon = currentSpecialPokemon(server, playerId, includeParty = !data.isTeamPrivate(playerId))
-                                if (pokemon.isEmpty()) {
-                                    TextCatalog.string(
-                                        "discord.no_special_pokemon",
-                                        "player" to (data.minecraftName(playerId) ?: user.effectiveName),
-                                        "discordId" to user.id
-                                    )
+                            val targetOption = event.getOption("jugador")?.asUser
+                            val dateFormatter = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm").withZone(ZoneId.of("America/Caracas"))
+                            if (targetOption == null) {
+                                // Sin @jugador: mostrar TODOS los legendarios capturados en el servidor
+                                val globalEntries = runCatching {
+                                    val clazz = Class.forName("com.addoncobblemon.legendarybestiary.LegendaryBestiaryData")
+                                    val dataObj = clazz.getMethod("get", net.minecraft.server.MinecraftServer::class.java).invoke(null, server)
+                                    @Suppress("UNCHECKED_CAST")
+                                    val list = clazz.getMethod("entries").invoke(dataObj) as? List<Any> ?: emptyList()
+                                    list.mapNotNull { entry ->
+                                        val ec = entry.javaClass
+                                        val captured = ec.getMethod("getCaptured").invoke(entry) as? Boolean ?: false
+                                        if (!captured) return@mapNotNull null
+                                        val name = ec.getMethod("getName").invoke(entry) as? String ?: "?"
+                                        val origOwner = ec.getMethod("getOriginalOwner").invoke(entry) as? String ?: ""
+                                        val currOwner = ec.getMethod("getCurrentOwner").invoke(entry) as? String ?: origOwner
+                                        val capAt = ec.getMethod("getCapturedAt").invoke(entry) as? Long ?: 0L
+                                        Triple(name, currOwner.ifBlank { origOwner.ifBlank { "Desconocido" } }, capAt)
+                                    }.sortedByDescending { it.third }
+                                }.getOrDefault(emptyList())
+
+                                val eb = net.dv8tion.jda.api.EmbedBuilder()
+                                    .setTitle("Registro Global de Legendarios")
+                                    .setColor(0x38BDF8)
+                                    .setFooter("Desgraciamon 3 • Legendarios capturados: ${globalEntries.size}")
+                                if (globalEntries.isEmpty()) {
+                                    eb.setDescription("Aún no se ha capturado ningún Pokémon legendario o mítico en el servidor.")
                                 } else {
-                                    val dateFormatter = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm").withZone(ZoneId.of("America/Caracas"))
-                                    val shown = pokemon.take(20).joinToString("\n") { caught ->
+                                    val lines = globalEntries.take(25).map { (spName, owner, capAt) ->
+                                        val dt = if (capAt > 0L) "<t:${capAt / 1000L}:f> (${dateFormatter.format(Instant.ofEpochMilli(capAt))})" else "Sin fecha"
+                                        "**$spName**\n└ Entrenador: **$owner** • $dt"
+                                    }
+                                    val desc = lines.joinToString("\n\n") + if (globalEntries.size > 25) "\n\n*...y ${globalEntries.size - 25} más.*" else ""
+                                    eb.setDescription(desc.take(4000))
+                                }
+                                responseEmbeds = listOf(eb.build())
+                                ""
+                            } else if (playerId == null) {
+                                TextCatalog.string("discord.player_not_linked", "player" to targetOption.effectiveName)
+                            } else {
+                                val mcName = data.minecraftName(playerId) ?: targetOption.effectiveName
+                                val pokemon = currentSpecialPokemon(server, playerId, includeParty = !data.isTeamPrivate(playerId))
+                                val eb = net.dv8tion.jda.api.EmbedBuilder()
+                                    .setTitle("Legendarios de $mcName")
+                                    .setThumbnail(targetOption.effectiveAvatarUrl)
+                                    .setColor(0x38BDF8)
+                                    .setFooter("Desgraciamon 3 • Total: ${pokemon.size}")
+                                if (pokemon.isEmpty()) {
+                                    eb.setDescription("<@${targetOption.id}> no tiene Pokémon legendarios ni míticos registrados.")
+                                } else {
+                                    val lines = pokemon.take(20).map { caught ->
                                         val record = data.captureRecord(playerId, caught.uuid)
                                         val capturedAt = record?.capturedAt
-                                        val dateText = capturedAt?.let { "<t:${it / 1000L}:d> · ${dateFormatter.format(Instant.ofEpochMilli(it))}" }
+                                        val dateText = capturedAt?.let { "<t:${it / 1000L}:f> (${dateFormatter.format(Instant.ofEpochMilli(it))})" }
                                             ?: TextCatalog.string("discord.date_missing")
                                         val shiny = caught.shiny || record?.shiny == true
                                         val formName = caught.form.name.lowercase().trim()
@@ -228,24 +264,14 @@ class DiscordBotListener(private val config: DiscordBridgeConfig) : ListenerAdap
                                         } else {
                                             caught.species.translatedName.string
                                         }
-                                        TextCatalog.string(
-                                            "discord.special_pokemon_line",
-                                            "shinyPrefix" to "",
-                                            "species" to speciesDisplayName,
-                                            "status" to TextCatalog.string(if (shiny) "team.state.shiny" else "team.state.normal"),
-                                            "date" to dateText
-                                        )
+                                        val stateTag = if (shiny) "✨ Shiny" else "Normal"
+                                        "**$speciesDisplayName** `[$stateTag]`\n└ Captura: $dateText"
                                     }
-                                    val remainder = if (pokemon.size > 20) TextCatalog.string("discord.special_pokemon_more", "count" to (pokemon.size - 20)) else ""
-                                    TextCatalog.string(
-                                        "discord.special_pokemon_list",
-                                        "player" to (data.minecraftName(playerId) ?: user.effectiveName),
-                                        "discordId" to user.id,
-                                        "count" to pokemon.size,
-                                        "pokemon" to shown,
-                                        "more" to remainder
-                                    )
+                                    val desc = lines.joinToString("\n\n") + if (pokemon.size > 20) "\n\n*...y ${pokemon.size - 20} más.*" else ""
+                                    eb.setDescription(desc.take(4000))
                                 }
+                                responseEmbeds = listOf(eb.build())
+                                ""
                             }
                         }
 
@@ -398,9 +424,17 @@ class DiscordBotListener(private val config: DiscordBridgeConfig) : ListenerAdap
 
     private fun handleAdmin(event: SlashCommandInteractionEvent) {
         val member = event.member
+        if (config.hasConfiguredAdminUsers() && !config.isAdminUser(event.user.id)) {
+            event.reply("Solo los usuarios administradores configurados por ID pueden usar `/admin`.").setEphemeral(true).queue()
+            return
+        }
         when (event.subcommandName) {
             "canal-skins" -> {
-                val hasPerm = member != null && (member.hasPermission(Permission.ADMINISTRATOR) || member.hasPermission(Permission.MANAGE_SERVER))
+                val hasPerm = if (config.hasConfiguredAdminUsers()) {
+                    config.isAdminUser(event.user.id)
+                } else {
+                    member != null && (member.hasPermission(Permission.ADMINISTRATOR) || member.hasPermission(Permission.MANAGE_SERVER))
+                }
                 if (!hasPerm) {
                     event.reply("Necesitas permisos de Administrador o Gestionar Servidor.").setEphemeral(true).queue()
                     return
@@ -429,6 +463,30 @@ class DiscordBotListener(private val config: DiscordBridgeConfig) : ListenerAdap
                         .queue()
                 }
             }
+            "desvincular" -> {
+                val server = DiscordBridgeRuntime.server
+                if (server == null) {
+                    event.reply(TextCatalog.string("discord.server_unavailable")).setEphemeral(true).queue()
+                    return
+                }
+                val targetUser = event.getOption("usuario")?.asUser
+                val targetName = event.getOption("jugador")?.asString?.trim()
+                if (targetUser == null && targetName.isNullOrBlank()) {
+                    event.reply("Debes indicar `usuario` de Discord o `jugador` de Minecraft.").setEphemeral(true).queue()
+                    return
+                }
+                val data = DiscordLinkData.get(server)
+                val msg = if (targetUser != null) {
+                    val mcName = data.unlinkDiscord(targetUser.id)
+                    if (mcName != null) "Se desvinculó a <@${targetUser.id}> de **$mcName**."
+                    else "<@${targetUser.id}> no tenía ninguna cuenta vinculada."
+                } else {
+                    val removed = data.unlinkByNameOrId(targetName!!)
+                    if (removed != null) "Se desvinculó la cuenta de Minecraft **${removed.second}** (`${removed.first}`)."
+                    else "No se encontró ninguna cuenta vinculada para **$targetName**."
+                }
+                event.reply(msg).setEphemeral(true).queue()
+            }
             else -> event.reply(TextCatalog.string("discord.unknown_command")).setEphemeral(true).queue()
         }
     }
@@ -450,17 +508,21 @@ class DiscordBotListener(private val config: DiscordBridgeConfig) : ListenerAdap
                     server.playerList.getPlayer(it)?.gameProfile?.name ?: data.minecraftName(it)
                 }
                 val embed = SkinConverterService.buildEmbed(result, author, linkedMcName)
-                val modelCode = if (result.model.equals("slim", ignoreCase = true)) "s" else "c"
                 val action = channel.sendMessageEmbeds(embed)
                 if (linkedMcName != null) {
-                    val button = Button.success("sk:$modelCode:${result.textureHash}:${author.id}", "Aplicar skin a $linkedMcName")
-                    action.setActionRow(button)
+                    val btnSteve = Button.success("sk:c:${result.textureHash}:${author.id}", "Steve (Clásico) • $linkedMcName")
+                    val btnAlex = Button.primary("sk:s:${result.textureHash}:${author.id}", "Alex (Slim) • $linkedMcName")
+                    action.setActionRow(btnSteve, btnAlex)
                 }
-                action.queue()
+                action.queue({ msg ->
+                    msg.delete().queueAfter(24, TimeUnit.HOURS, null) { /* ignore */ }
+                }, null)
             }
         } else {
             val embed = SkinConverterService.buildEmbed(result, author, null)
-            channel.sendMessageEmbeds(embed).queue()
+            channel.sendMessageEmbeds(embed).queue({ msg ->
+                msg.delete().queueAfter(24, TimeUnit.HOURS, null) { /* ignore */ }
+            }, null)
         }
     }
 
@@ -481,17 +543,21 @@ class DiscordBotListener(private val config: DiscordBridgeConfig) : ListenerAdap
                     server.playerList.getPlayer(it)?.gameProfile?.name ?: data.minecraftName(it)
                 }
                 val embed = SkinConverterService.buildEmbed(result, user, linkedMcName)
-                val modelCode = if (result.model.equals("slim", ignoreCase = true)) "s" else "c"
                 val action = hook.editOriginalEmbeds(embed)
                 if (linkedMcName != null) {
-                    val button = Button.success("sk:$modelCode:${result.textureHash}:${user.id}", "Aplicar skin a $linkedMcName")
-                    action.setActionRow(button)
+                    val btnSteve = Button.success("sk:c:${result.textureHash}:${user.id}", "Steve (Clásico) • $linkedMcName")
+                    val btnAlex = Button.primary("sk:s:${result.textureHash}:${user.id}", "Alex (Slim) • $linkedMcName")
+                    action.setActionRow(btnSteve, btnAlex)
                 }
-                action.queue()
+                action.queue({ msg ->
+                    msg.delete().queueAfter(24, TimeUnit.HOURS, null) { /* ignore */ }
+                }, null)
             }
         } else {
             val embed = SkinConverterService.buildEmbed(result, user, null)
-            hook.editOriginalEmbeds(embed).queue()
+            hook.editOriginalEmbeds(embed).queue({ msg ->
+                msg.delete().queueAfter(24, TimeUnit.HOURS, null) { /* ignore */ }
+            }, null)
         }
     }
 
@@ -531,14 +597,14 @@ class DiscordBotListener(private val config: DiscordBridgeConfig) : ListenerAdap
             }
 
             val modelArg = if (modelCode == "s") "slim" else "classic"
-            val textureUrl = "http://textures.minecraft.net/texture/$hash"
+            val textureUrl = "https://textures.minecraft.net/texture/$hash"
 
             server.execute {
                 try {
                     val data = DiscordLinkData.get(server)
                     val playerId = data.playerForDiscord(event.user.id)
                     if (playerId == null) {
-                        hook.editOriginal("Tu cuenta de Discord no está vinculada a ningún personaje de Minecraft.\nUsa `/discord vincular` en el juego para vincularte.").queue(null) { /* ignore */ }
+                        hook.editOriginal("Tu cuenta de Discord no está vinculada a ningún personaje de Minecraft.\nUsa `/cuenta vincular` en el juego para vincularte.").queue(null) { /* ignore */ }
                         return@execute
                     }
 
@@ -549,11 +615,7 @@ class DiscordBotListener(private val config: DiscordBridgeConfig) : ListenerAdap
                     if (onlinePlayer != null) {
                         server.commands.performPrefixedCommand(
                             server.createCommandSourceStack(),
-                            "execute as $mcName run skin set web $modelArg \"$textureUrl\""
-                        )
-                        server.commands.performPrefixedCommand(
-                            server.createCommandSourceStack(),
-                            "skin set web $modelArg \"$textureUrl\" $mcName"
+                            "skin set web $modelArg $textureUrl $mcName"
                         )
                         onlinePlayer.sendSystemMessage(
                             Component.literal("§6[Desgraciamon] §a¡Tu skin ha sido actualizada desde Discord!")
@@ -562,7 +624,7 @@ class DiscordBotListener(private val config: DiscordBridgeConfig) : ListenerAdap
                     } else {
                         server.commands.performPrefixedCommand(
                             server.createCommandSourceStack(),
-                            "skin set web $modelArg \"$textureUrl\" $mcName"
+                            "skin set web $modelArg $textureUrl $mcName"
                         )
                         hook.editOriginal("¡Listo! Se ha guardado la skin para tu personaje **$mcName**.\nSe verá reflejada automáticamente la próxima vez que entres al servidor.").queue(null) { /* ignore */ }
                     }

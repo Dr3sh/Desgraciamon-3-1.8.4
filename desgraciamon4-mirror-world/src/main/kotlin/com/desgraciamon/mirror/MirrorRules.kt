@@ -84,6 +84,7 @@ object MirrorRules {
         val displayName: String,
         val speciesName: String,
         val spawnedAtMillis: Long,
+        var lastSeenAtMillis: Long = spawnedAtMillis,
     )
 
     /**
@@ -174,7 +175,6 @@ object MirrorRules {
         if (entity is Player) return true
         if (entity is PokemonEntity) {
             if (MEMORY_TAG in entity.tags) return true
-            if (entity.ownerUUID != null) return true
         }
         return false
     }
@@ -272,10 +272,25 @@ object MirrorRules {
             }
         }
 
-        // Bloqueo total de generación salvaje de Cobblemon en dimension_recuerdos
+        // Bloqueo total de generación salvaje de Cobblemon en dimension_recuerdos y marcar cualquier Pokémon como no combatible
         CobblemonEvents.POKEMON_ENTITY_SPAWN.subscribe(Priority.HIGHEST) { event ->
-            if (isRecuerdos(event.entity.level())) {
+            val entity = event.entity
+            if (isRecuerdos(entity.level())) {
                 event.cancel()
+            } else if (isMirror(entity.level())) {
+                entity.entityData.set(PokemonEntity.UNBATTLEABLE, true)
+                entity.isInvulnerable = true
+            }
+        }
+
+        // Prohibir sacar Pokémon del equipo en Mundo Espejo y Dimensión de los Recuerdos
+        CobblemonEvents.POKEMON_SENT_PRE.subscribe(Priority.HIGHEST) { event ->
+            if (isMirror(event.level) || isRecuerdos(event.level)) {
+                event.cancel()
+                event.pokemon.getOwnerUUID()?.let { uuid ->
+                    event.level.server.playerList.getPlayer(uuid)
+                        ?.displayClientMessage(Component.literal("§cNo puedes sacar tus Pokémon en esta dimensión."), true)
+                }
             }
         }
 
@@ -302,10 +317,18 @@ object MirrorRules {
             }
         }
 
-        // Eliminar cualquier abeja en dimension_recuerdos
+        // Eliminar cualquier abeja en dimension_recuerdos y asegurar que ningún Pokémon tenga "R para combatir" en ambas dimensiones
         net.fabricmc.fabric.api.event.lifecycle.v1.ServerEntityEvents.ENTITY_LOAD.register { entity, world ->
             if (isRecuerdos(world) && entity is net.minecraft.world.entity.animal.Bee) {
                 entity.discard()
+                return@register
+            }
+            if ((isMirror(world) || isRecuerdos(world)) && entity is PokemonEntity) {
+                entity.entityData.set(PokemonEntity.UNBATTLEABLE, true)
+                entity.isInvulnerable = true
+                if (entity.ownerUUID != null && MEMORY_TAG !in entity.tags) {
+                    entity.recallWithAnimation()
+                }
             }
         }
 
@@ -345,7 +368,7 @@ object MirrorRules {
                     val y = player.y
                     val dist = kotlin.math.sqrt(x * x + z * z)
 
-                    // Bloqueo inescalable:
+                        // Bloqueo inescalable:
                     // Si intenta escalar las montanas altas (dist >= 210 y y >= 135) o salirse del radio (dist >= 242)
                     if (dist >= 242.0 || (dist >= 210.0 && y >= 135.0)) {
                         val nx = if (dist > 0.001) -x / dist else 0.0
@@ -353,6 +376,18 @@ object MirrorRules {
                         player.deltaMovement = Vec3(nx * 0.85, -0.2, nz * 0.85)
                         player.hurtMarked = true
                         notifyCannotClimb(player)
+                    }
+                }
+                if (tickCounter % 20 == 0) {
+                    for (player in recuerdosLevel.players()) {
+                        for (pkmEntity in recuerdosLevel.getEntitiesOfClass(PokemonEntity::class.java, player.boundingBox.inflate(48.0))) {
+                            if (!pkmEntity.entityData.get(PokemonEntity.UNBATTLEABLE)) {
+                                pkmEntity.entityData.set(PokemonEntity.UNBATTLEABLE, true)
+                            }
+                            if (!pkmEntity.isInvulnerable) {
+                                pkmEntity.isInvulnerable = true
+                            }
+                        }
                     }
                 }
             }
@@ -445,8 +480,22 @@ object MirrorRules {
             TerrainGenerator.generate(level, index)
             PlotManager.markGenerated(index)
         }
+        val existingState = plotStates[index]
+        if (existingState != null && existingState.ownerUuid != ownerUuid) {
+            clearPlotEntities(level, index)
+        }
         spawnOrFillPlotMemories(level, index, ownerUuid)
         return index
+    }
+
+    fun syncPlotOriginsToPlayer(player: ServerPlayer, plotIndex: Int) {
+        val state = plotStates[plotIndex] ?: return
+        val map = LinkedHashMap<Int, String>()
+        for (entity in state.activeEntities) {
+            val meta = activeMemories[entity.uuid] ?: continue
+            map[entity.id] = meta.entry.season
+        }
+        MirrorPackets.sendOrigins(player, map)
     }
 
     fun respawnPlotMemories(level: ServerLevel, ownerUuid: UUID) {
@@ -461,7 +510,7 @@ object MirrorRules {
         ownerUuid: UUID,
         playersInPlot: List<ServerPlayer> = emptyList(),
     ) {
-        val memories = MemoryLoader.get(ownerUuid).selected
+        val memories = MemoryLoader.get(ownerUuid, level.server).selected
         if (memories.isEmpty()) return
 
         val state = plotStates.getOrPut(index) {
@@ -539,14 +588,25 @@ object MirrorRules {
             if (level.addFreshEntity(entity)) {
                 val speciesName = pokemon.species.translatedName.string
                 val displayName = entry.nickname.ifBlank { speciesName }
+                val nowMs = System.currentTimeMillis()
                 activeMemories[entity.uuid] = ActiveMemoryMeta(
                     plotIndex = index,
                     ownerUuid = ownerUuid,
                     entry = entry,
                     displayName = displayName,
                     speciesName = speciesName,
-                    spawnedAtMillis = System.currentTimeMillis(),
+                    spawnedAtMillis = nowMs,
+                    lastSeenAtMillis = nowMs,
                 )
+                val originPayload = mapOf(entity.id to entry.season)
+                val recipients = if (preferOutOfViewFrom.isNotEmpty()) {
+                    preferOutOfViewFrom
+                } else {
+                    level.players().filter { PlotManager.plotAt(it.x) == index }
+                }
+                for (recipient in recipients) {
+                    MirrorPackets.sendOrigins(recipient, originPayload)
+                }
                 entity
             } else null
         }.onFailure {
@@ -587,9 +647,12 @@ object MirrorRules {
         activeMemories.clear()
     }
 
+    private var mirrorTickCycle = 0
+
     private fun tickMirrorWorld(server: MinecraftServer, shouldRotate: Boolean) {
         val level = server.getLevel(DIMENSION_KEY) ?: return
         val playersInMirror = level.players()
+        mirrorTickCycle++
 
         // Agrupar jugadores por parcela
         val playersByPlot = HashMap<Int, MutableList<ServerPlayer>>()
@@ -616,9 +679,12 @@ object MirrorRules {
             spawnOrFillPlotMemories(level, plotIndex, owner, playersInPlot)
             val state = plotStates[plotIndex] ?: continue
 
-            // Mantener todos los Pokémon dentro del santuario flotante
+            // Mantener todos los Pokémon dentro del santuario flotante y sin "R para combatir"
             for (entity in state.activeEntities) {
                 if (!entity.isAlive || entity.isRemoved) continue
+                if (!entity.entityData.get(PokemonEntity.UNBATTLEABLE)) {
+                    entity.entityData.set(PokemonEntity.UNBATTLEABLE, true)
+                }
                 if (entity.y < TerrainGenerator.BASE - 12 || !TerrainGenerator.isInsideMeadow(plotIndex, entity.x, entity.z)) {
                     val safe = TerrainGenerator.randomSpawn(level, plotIndex, level.random, false)
                     entity.teleportTo(safe.x, safe.y, safe.z)
@@ -642,7 +708,37 @@ object MirrorRules {
                 }
             }
 
-            // Rotación de Pokémon cuando están a > 20 bloques y fuera de la vista del jugador
+            // Actualizar seguimiento de visibilidad para que nunca despawneen frente al jugador
+            val now = System.currentTimeMillis()
+            val protectDistSq = 16.0 * 16.0
+            for (entity in state.activeEntities) {
+                if (!entity.isAlive || entity.isRemoved) continue
+                val meta = activeMemories[entity.uuid] ?: continue
+                val visibleToAny = playersInPlot.any { player ->
+                    val dx = entity.x - player.x
+                    val dz = entity.z - player.z
+                    val distSq = dx * dx + dz * dz
+                    if (distSq <= protectDistSq) return@any true
+                    val horizLen = kotlin.math.sqrt(distSq)
+                    if (horizLen < 0.001) return@any true
+                    val lookLen = kotlin.math.sqrt(player.lookAngle.x * player.lookAngle.x + player.lookAngle.z * player.lookAngle.z)
+                    if (lookLen < 0.001) return@any true
+                    val dot = (player.lookAngle.x / lookLen) * (dx / horizLen) + (player.lookAngle.z / lookLen) * (dz / horizLen)
+                    dot > -0.25
+                }
+                if (visibleToAny) {
+                    meta.lastSeenAtMillis = now
+                }
+            }
+
+            // Resincronizar origenes periodicamente para evitar tarjetas sin temporada
+            if (mirrorTickCycle % 2 == 0) {
+                for (player in playersInPlot) {
+                    syncPlotOriginsToPlayer(player, plotIndex)
+                }
+            }
+
+            // Rotación de Pokémon solo cuando llevan tiempo sin ser vistos y están detrás del jugador
             if (shouldRotate) {
                 rotateOutOfSightPokemon(level, plotIndex, state, playersInPlot)
             }
@@ -651,8 +747,8 @@ object MirrorRules {
 
     /**
      * Si el jugador tiene más Pokémon en su pool total que los actualmente spawneados,
-     * busca hasta 2 Pokémon que lleven un tiempo prudencial en escena, estén a más de 20 bloques
-     * y ningún jugador los esté mirando, y los rota por los siguientes de la baraja barajada.
+     * busca Pokémon que lleven suficiente tiempo en escena, estén detrás del jugador a >18 bloques
+     * y hayan permanecido fuera de su campo visual al menos 4.5 segundos continuos antes de rotarlos.
      */
     private fun rotateOutOfSightPokemon(
         level: ServerLevel,
@@ -664,35 +760,38 @@ object MirrorRules {
         if (state.allPool.size <= maxActive) return // Todos caben a la vez, no hace falta rotar
 
         val now = System.currentTimeMillis()
-        val minAgeMs = MirrorSettings.config.rotationMinAgeSeconds.coerceAtLeast(1) * 1000L
-        val minDist = MirrorSettings.config.rotationDistanceBlocks.coerceAtLeast(4.0)
+        val minAgeMs = MirrorSettings.config.rotationMinAgeSeconds.coerceAtLeast(15) * 1000L
+        val minUnseenMs = 4_500L
+        val minDist = MirrorSettings.config.rotationDistanceBlocks.coerceAtLeast(18.0)
         val minDistSq = minDist * minDist
 
-        // Buscar candidatos que ningún jugador esté mirando y estén a la distancia configurada
+        // Buscar candidatos que ningún jugador esté mirando desde hace >= 4.5s y estén detrás a buena distancia
         val candidatesToDespawn = state.activeEntities.filter { entity ->
             if (!entity.isAlive || entity.isRemoved) return@filter false
             val meta = activeMemories[entity.uuid] ?: return@filter false
             if (now - meta.spawnedAtMillis < minAgeMs) return@filter false
+            if (now - meta.lastSeenAtMillis < minUnseenMs) return@filter false
 
             playersInPlot.all { player ->
                 val dx = entity.x - player.x
                 val dz = entity.z - player.z
                 val distSq = dx * dx + dz * dz
-                if (distSq < minDistSq) return@all false // Está a menos de la distancia mínima
+                if (distSq < minDistSq) return@all false
 
-                // Vector horizontal de mirada del jugador vs dirección hacia el Pokémon
-                val look = Vec3(player.lookAngle.x, 0.0, player.lookAngle.z).normalize()
-                val toEntity = Vec3(dx, 0.0, dz).normalize()
-                val dot = look.dot(toEntity)
-                // dot < 0.15 significa que el jugador no está mirando hacia la dirección del Pokémon
-                dot < 0.15
+                val horizLen = kotlin.math.sqrt(distSq)
+                val lookLen = kotlin.math.sqrt(player.lookAngle.x * player.lookAngle.x + player.lookAngle.z * player.lookAngle.z)
+                if (horizLen < 0.001 || lookLen < 0.001) return@all false
+
+                val dot = (player.lookAngle.x / lookLen) * (dx / horizLen) + (player.lookAngle.z / lookLen) * (dz / horizLen)
+                // dot < -0.25 garantiza que esté claramente detrás de la espalda del jugador
+                dot < -0.25
             }
         }
 
         if (candidatesToDespawn.isEmpty()) return
 
-        // Rotar hasta 3 Pokémon por ciclo para que la transición sea suave y continua
-        val toRotate = candidatesToDespawn.shuffled().take(3)
+        // Rotar hasta 2 Pokémon por ciclo para que la rotación sea imperceptible
+        val toRotate = candidatesToDespawn.shuffled().take(2)
         for (oldEntity in toRotate) {
             state.activeEntities.remove(oldEntity)
             activeMemories.remove(oldEntity.uuid)

@@ -10,14 +10,20 @@ import net.minecraft.client.Minecraft
 import net.minecraft.client.gui.GuiGraphics
 import net.minecraft.client.gui.components.EditBox
 import net.minecraft.client.gui.screens.Screen
+import net.minecraft.locale.Language
 import net.minecraft.network.chat.Component
 import net.minecraft.resources.ResourceLocation
 import org.joml.Quaternionf
+import java.text.Collator
+import java.util.Locale
 
 class BiomeLocatorScreen(private val previousScreen: Screen? = null) : Screen(Component.literal("Codex de Hábitats & Expediciones")) {
     companion object {
         const val BASE_W = 590
         const val BASE_H = 340
+        private val SPANISH_COLLATOR: Collator = Collator.getInstance(Locale("es", "ES")).apply {
+            strength = Collator.PRIMARY
+        }
     }
 
     private var uiScale: Float = 1.0f
@@ -40,7 +46,32 @@ class BiomeLocatorScreen(private val previousScreen: Screen? = null) : Screen(Co
     private var selectedRarityFilter: String = "ALL"
     private var onlyRegisteredFilter: Boolean = false
     private var searchQuery: String = ""
+    private var pendingPokemonSearchQuery: String = ""
+    private var pendingPokemonSearchAtMs: Long = 0L
+    private var lastRequestedPokemonQuery: String = ""
     private var searchBox: EditBox? = null
+
+    private fun resolveDisplayBiomeName(id: String, fallbackName: String = ""): String {
+        val res = ResourceLocation.tryParse(id.trim())
+        if (res != null) {
+            val lang = Language.getInstance()
+            val dotKey = "biome.${res.namespace}.${res.path.replace('/', '.')}"
+            if (lang.has(dotKey)) {
+                val translated = lang.getOrDefault(dotKey)
+                if (translated.isNotBlank() && translated != dotKey && !translated.contains('/')) {
+                    return translated
+                }
+            }
+            val slashKey = "biome.${res.namespace}.${res.path}"
+            if (lang.has(slashKey)) {
+                val translated = lang.getOrDefault(slashKey)
+                if (translated.isNotBlank() && translated != slashKey) {
+                    return translated.substringAfterLast('/')
+                }
+            }
+        }
+        return BiomeLocatorServer.translateBiomeName(id, fallbackName)
+    }
 
     private fun getLeftListY(top: Int = 0): Int = if (searchQuery.isNotBlank()) top + 99 else top + 80
     private fun getLeftListH(top: Int = 0): Int = (top + BASE_H - 12) - getLeftListY(top)
@@ -82,17 +113,22 @@ class BiomeLocatorScreen(private val previousScreen: Screen? = null) : Screen(Co
         val searchH = 16
 
         val currentText = searchBox?.value ?: ""
-        searchBox = EditBox(font, searchX + 18, searchY + 2, searchW - 22, searchH - 4, Component.literal("Buscar")).apply {
+        searchBox = EditBox(font, searchX + 16, searchY + 2, searchW - 20, searchH - 4, Component.literal("Buscar")).apply {
             setMaxLength(36)
             setBordered(false)
             setTextColor(0xFFF3E9D2.toInt())
             setValue(currentText)
             setResponder {
-                searchQuery = it.trim().lowercase()
+                val normalized = it.trim().lowercase()
+                if (normalized == searchQuery) return@setResponder
+                searchQuery = normalized
                 leftScrollOffset = 0.0
                 if (searchQuery.length >= 2) {
-                    BiomeLocatorClientState.requestPokemonSearch(searchQuery)
+                    pendingPokemonSearchQuery = searchQuery
+                    pendingPokemonSearchAtMs = System.currentTimeMillis() + 250L
                 } else {
+                    pendingPokemonSearchQuery = ""
+                    lastRequestedPokemonQuery = ""
                     BiomeLocatorClientState.matchedPokemonQuery = ""
                     BiomeLocatorClientState.matchedPokemonName = ""
                     BiomeLocatorClientState.matchedPokemonBiomeIds = emptySet()
@@ -113,6 +149,18 @@ class BiomeLocatorScreen(private val previousScreen: Screen? = null) : Screen(Co
 
         recalculateLeftScroll()
         recalculateRightScroll()
+    }
+
+    override fun tick() {
+        super.tick()
+        val pending = pendingPokemonSearchQuery
+        if (pending.length >= 2 && System.currentTimeMillis() >= pendingPokemonSearchAtMs) {
+            pendingPokemonSearchQuery = ""
+            if (pending != lastRequestedPokemonQuery) {
+                lastRequestedPokemonQuery = pending
+                BiomeLocatorClientState.requestPokemonSearch(pending)
+            }
+        }
     }
 
     fun onSyncUpdated() {
@@ -160,9 +208,9 @@ class BiomeLocatorScreen(private val previousScreen: Screen? = null) : Screen(Co
     private fun recalculateRightScroll() {
         val spawns = getFilteredSpawns()
         val totalRows = (spawns.size + 1) / 2
-        val cardH = 80
-        val cardGap = 6
-        val visibleHeight = 202
+        val cardH = 50
+        val cardGap = 5
+        val visibleHeight = 222
         rightMaxScroll = maxOf(0.0, (totalRows * (cardH + cardGap) - visibleHeight).toDouble())
         rightScrollOffset = rightScrollOffset.coerceIn(0.0, rightMaxScroll)
     }
@@ -184,8 +232,8 @@ class BiomeLocatorScreen(private val previousScreen: Screen? = null) : Screen(Co
 
             // Filter by Pokémon match or Biome search query (matches both Spanish and English biome/Pokémon names)
             if (searchQuery.isNotBlank()) {
-                val spanishName = BiomeLocatorServer.translateBiomeName(b.id, b.name).lowercase()
-                val englishWords = b.id.substringAfter(':').replace('_', ' ').lowercase()
+                val spanishName = resolveDisplayBiomeName(b.id, b.name).lowercase()
+                val englishWords = b.id.substringAfter(':').substringAfterLast('/').replace('_', ' ').lowercase()
                 val matchBiome = spanishName.contains(searchQuery) ||
                     b.name.lowercase().contains(searchQuery) ||
                     b.id.lowercase().contains(searchQuery) ||
@@ -200,6 +248,8 @@ class BiomeLocatorScreen(private val previousScreen: Screen? = null) : Screen(Co
             }
 
             true
+        }.sortedWith { a, b ->
+            SPANISH_COLLATOR.compare(resolveDisplayBiomeName(a.id, a.name), resolveDisplayBiomeName(b.id, b.name))
         }
     }
 
@@ -207,15 +257,20 @@ class BiomeLocatorScreen(private val previousScreen: Screen? = null) : Screen(Co
         val biome = selectedBiome ?: return emptyList()
         val allSpawns = BiomeLocatorClientState.biomeSpawnsCache[biome.id] ?: return emptyList()
 
-        val list = if (selectedRarityFilter == "ALL") allSpawns else allSpawns.filter { it.bucket.equals(selectedRarityFilter, ignoreCase = true) }
-
-        // If user searched for a Pokémon name, bump the matched Pokémon to the top of the grid!
-        if (searchQuery.isNotBlank()) {
-            val q = searchQuery
-            return list.sortedByDescending { it.displayName.lowercase().contains(q) || it.speciesId.lowercase().contains(q) }
+        // Deduplicar por especie/aspecto (ya no se muestran variantes por rareza ni condiciones)
+        val deduplicated = allSpawns.distinctBy {
+            "${it.speciesId.lowercase()}#${it.aspects.map { a -> a.lowercase() }.sorted().joinToString(",")}"
         }
 
-        return list
+        val q = searchQuery
+        return deduplicated.sortedWith(Comparator { a, b ->
+            if (q.isNotBlank()) {
+                val hitA = a.displayName.lowercase().contains(q) || a.speciesId.lowercase().contains(q)
+                val hitB = b.displayName.lowercase().contains(q) || b.speciesId.lowercase().contains(q)
+                if (hitA != hitB) return@Comparator if (hitA) -1 else 1
+            }
+            SPANISH_COLLATOR.compare(a.displayName, b.displayName)
+        })
     }
 
     override fun mouseScrolled(mouseX: Double, mouseY: Double, scrollX: Double, scrollY: Double): Boolean {
@@ -254,8 +309,8 @@ class BiomeLocatorScreen(private val previousScreen: Screen? = null) : Screen(Co
             val top = 0
             val rightY = top + 68
             val rightH = BASE_H.toInt() - 78
-            val spawnsListY = rightY + 56
-            val spawnsListH = rightH - 60
+            val spawnsListY = rightY + 36
+            val spawnsListH = rightH - 40
             val rightBarH = spawnsListH
             val thumbH = maxOf(16, (rightBarH * (spawnsListH / (rightMaxScroll + spawnsListH))).toInt())
             val usableH = rightBarH - thumbH
@@ -349,8 +404,8 @@ class BiomeLocatorScreen(private val previousScreen: Screen? = null) : Screen(Co
             val sbRightW = panelWidth.toInt() - sbRightX - 14
             val sbRightY = top + 68
             val sbRightH = panelHeight.toInt() - 78
-            val spawnsListY = sbRightY + 56
-            val spawnsListH = sbRightH - 60
+            val spawnsListY = sbRightY + 36
+            val spawnsListH = sbRightH - 40
             val rightBarX = sbRightX + sbRightW - 7
             val rightBarY = spawnsListY
             val rightBarH = spawnsListH
@@ -508,22 +563,6 @@ class BiomeLocatorScreen(private val previousScreen: Screen? = null) : Screen(Co
                     return true
                 }
             }
-
-            // Rarity Filter Pills - Exact coordinates matching render
-            val rarityY = rightY + 32
-            val rarities = listOf("ALL" to "Todos", "ultra-rare" to "Ultra Raros", "rare" to "Raros", "uncommon" to "Poco comunes", "common" to "Comunes")
-            var rx = rightX + 8
-
-            for ((rKey, rLabel) in rarities) {
-                val rw = font.width(rLabel) + 10
-                if (mouseX >= rx && mouseX <= rx + rw && mouseY >= rarityY && mouseY <= rarityY + 16) {
-                    selectedRarityFilter = rKey
-                    rightScrollOffset = 0.0
-                    recalculateRightScroll()
-                    return true
-                }
-                rx += rw + 4
-            }
         }
 
         return super.mouseClicked(mouseX, mouseY, button)
@@ -543,64 +582,66 @@ class BiomeLocatorScreen(private val previousScreen: Screen? = null) : Screen(Co
         val localMouseX = ((mouseX - renderX) / uiScale).toInt()
         val localMouseY = ((mouseY - renderY) / uiScale).toInt()
 
-        val pose = graphics.pose()
-        pose.pushPose()
-        pose.translate(renderX, renderY, 0f)
-        pose.scale(uiScale, uiScale, 1.0f)
-
-        // Opening animation ease (Guild pop-in)
-        val progress = ((System.nanoTime() - openedAtNanos) / 280_000_000.0f).coerceIn(0f, 1f)
-        if (progress < 1.0f) {
-            val ease = 1f - (1f - progress).let { it * it * it }
-            val scale = 0.08f + 0.92f * ease
-            val cx = BASE_W / 2f
-            val cy = BASE_H / 2f
-            pose.translate(cx, cy, 0f)
-            pose.scale(scale, scale, 1f)
-            pose.translate(-cx, -cy, 0f)
-        }
-
         val left = 0
         val top = 0
         val panelWidth = BASE_W
         val panelHeight = BASE_H
 
-        // --- ENCYCLOPEDIA CODEX FRAME ---
-        // 1. Antique Leather Outer Binding
-        graphics.fill(left, top, left + panelWidth, top + panelHeight, 0xF8181412.toInt())
-        drawBorder(graphics, left, top, panelWidth, panelHeight, 0xFF4A3A2C.toInt())
-        drawBorder(graphics, left + 1, top + 1, panelWidth - 2, panelHeight - 2, 0xFF2A2018.toInt())
+        val pose = graphics.pose()
+        pose.pushPose()
+        try {
+            pose.translate(renderX, renderY, 0f)
+            pose.scale(uiScale, uiScale, 1.0f)
 
-        // 2. Parchment page background (Left & Right pages)
-        val pageY = top + 34
-        val pageH = panelHeight - 44
-        graphics.fill(left + 6, pageY, left + panelWidth - 6, pageY + pageH, 0xF61C1815.toInt())
-        drawBorder(graphics, left + 6, pageY, panelWidth - 12, pageH, 0xFF3D2F23.toInt())
+            // Opening animation ease (Guild pop-in)
+            val progress = ((System.nanoTime() - openedAtNanos) / 280_000_000.0f).coerceIn(0f, 1f)
+            if (progress < 1.0f) {
+                val ease = 1f - (1f - progress).let { it * it * it }
+                val scale = 0.08f + 0.92f * ease
+                val cx = BASE_W / 2f
+                val cy = BASE_H / 2f
+                pose.translate(cx, cy, 0f)
+                pose.scale(scale, scale, 1f)
+                pose.translate(-cx, -cy, 0f)
+            }
 
-        // 3. Central Book Spine Embossed Divider
-        val spineX = left + 233
-        graphics.fill(spineX, pageY, spineX + 3, pageY + pageH, 0xFF120E0C.toInt())
-        graphics.fill(spineX + 1, pageY + 4, spineX + 2, pageY + pageH - 4, 0xFF5C4736.toInt())
+            // --- ENCYCLOPEDIA CODEX FRAME ---
+            // 1. Antique Leather Outer Binding
+            graphics.fill(left, top, left + panelWidth, top + panelHeight, 0xF8181412.toInt())
+            drawBorder(graphics, left, top, panelWidth, panelHeight, 0xFF4A3A2C.toInt())
+            drawBorder(graphics, left + 1, top + 1, panelWidth - 2, panelHeight - 2, 0xFF2A2018.toInt())
 
-        // Top Bookmark Ribbon Tabs
-        renderDimensionTabs(graphics, left, top, localMouseX, localMouseY)
+            // 2. Parchment page background (Left & Right pages)
+            val pageY = top + 34
+            val pageH = panelHeight - 44
+            graphics.fill(left + 6, pageY, left + panelWidth - 6, pageY + pageH, 0xF61C1815.toInt())
+            drawBorder(graphics, left + 6, pageY, panelWidth - 12, pageH, 0xFF3D2F23.toInt())
 
-        // Header Medallions & Study Progress
-        renderHeaderStats(graphics, left, top, panelWidth)
+            // 3. Central Book Spine Embossed Divider
+            val spineX = left + 233
+            graphics.fill(spineX, pageY, spineX + 3, pageY + pageH, 0xFF120E0C.toInt())
+            graphics.fill(spineX + 1, pageY + 4, spineX + 2, pageY + pageH - 4, 0xFF5C4736.toInt())
 
-        // Subheader (Search bar & Category pills)
-        renderSubheader(graphics, left, top, panelWidth, localMouseX, localMouseY)
+            // Top Bookmark Ribbon Tabs
+            renderDimensionTabs(graphics, left, top, localMouseX, localMouseY)
 
-        // Left Page: Biome Index List
-        renderBiomeList(graphics, left, top, panelHeight, localMouseX, localMouseY)
+            // Header Medallions & Study Progress
+            renderHeaderStats(graphics, left, top, panelWidth)
 
-        // Right Page: Field Observations & Pokemon Grid
-        renderBiomeInspector(graphics, left, top, panelWidth, panelHeight, localMouseX, localMouseY, partialTick)
+            // Subheader (Search bar & Category pills)
+            renderSubheader(graphics, left, top, panelWidth, localMouseX, localMouseY)
 
-        // Render searchBox inside the scaled canvas at its local bounds
-        searchBox?.render(graphics, localMouseX, localMouseY, partialTick)
+            // Left Page: Biome Index List
+            renderBiomeList(graphics, left, top, panelHeight, localMouseX, localMouseY)
 
-        pose.popPose()
+            // Right Page: Field Observations & Pokemon Grid
+            renderBiomeInspector(graphics, left, top, panelWidth, panelHeight, localMouseX, localMouseY, partialTick)
+
+            // Render searchBox inside the scaled canvas at its local bounds
+            searchBox?.render(graphics, localMouseX, localMouseY, partialTick)
+        } finally {
+            pose.popPose()
+        }
 
         // Tooltips rendered on top in screen space
         renderTooltips(graphics, left, top, panelWidth, panelHeight, localMouseX, localMouseY, mouseX, mouseY)
@@ -696,7 +737,7 @@ class BiomeLocatorScreen(private val previousScreen: Screen? = null) : Screen(Co
         graphics.fill(searchX, searchY, searchX + searchW, searchY + searchH, 0xFF171310.toInt())
         val searchBorder = if (searchBox?.isFocused == true) 0xFFD4AF37.toInt() else 0xFF4A392A.toInt()
         drawBorder(graphics, searchX, searchY, searchW, searchH, searchBorder)
-        graphics.blit(ICON_SEARCH, searchX + 2, searchY, 0f, 0f, 16, 16, 16, 16)
+        graphics.blit(ICON_SEARCH, searchX + 4, searchY + 3, 0f, 0f, 10, 10, 10, 10)
 
         // Category Pills (styled as antique chapter bookmark ribbons)
         val catY = top + 42
@@ -812,7 +853,7 @@ class BiomeLocatorScreen(private val previousScreen: Screen? = null) : Screen(Co
 
             // Biome Name translated to Spanish and strictly clipped to card width
             val nameColor = if (isSelected) 0xFFFFFAEB.toInt() else 0xFFE2D6C3.toInt()
-            val displayBiomeName = BiomeLocatorServer.translateBiomeName(biome.id, biome.name)
+            val displayBiomeName = resolveDisplayBiomeName(biome.id, biome.name)
             val clippedName = font.plainSubstrByWidth(displayBiomeName, cardW - 10)
             graphics.drawString(font, clippedName, listX + 7, cy + 4, nameColor, false)
 
@@ -904,224 +945,164 @@ class BiomeLocatorScreen(private val previousScreen: Screen? = null) : Screen(Co
         }
 
         // Inspector Header strictly bounded to not touch action button(s)
-        val displayBiomeTitle = BiomeLocatorServer.translateBiomeName(biome.id, biome.name)
+        val displayBiomeTitle = resolveDisplayBiomeName(biome.id, biome.name)
         val clippedTitle = font.plainSubstrByWidth(displayBiomeTitle, titleMaxWidth)
         graphics.drawString(font, clippedTitle, rightX + 8, rightY + 8, 0xFFFFFAEB.toInt(), false)
 
-        val idRaw = "ID: ${biome.id}"
-        val clippedId = font.plainSubstrByWidth(idRaw, titleMaxWidth)
-        graphics.drawString(font, "§8$clippedId", rightX + 8, rightY + 20, 0xFF9E8B75.toInt(), false)
-
-        // Rarity Filter Pills - Exact coordinates matching mouseClicked
-        val rarityY = rightY + 32
-        val rarities = listOf("ALL" to "Todos", "ultra-rare" to "Ultra Raros", "rare" to "Raros", "uncommon" to "Poco comunes", "common" to "Comunes")
-        var rx = rightX + 8
-
-        for ((rKey, rLabel) in rarities) {
-            val rw = font.width(rLabel) + 10
-            val isSelected = selectedRarityFilter == rKey
-            val isHovered = mouseX >= rx && mouseX <= rx + rw && mouseY >= rarityY && mouseY <= rarityY + 16
-
-            val bg = when {
-                isSelected -> 0xFF4A3724.toInt()
-                isHovered -> 0xFF2A2016.toInt()
-                else -> 0xFF19130F.toInt()
-            }
-            graphics.fill(rx, rarityY, rx + rw, rarityY + 16, bg)
-            val border = if (isSelected) 0xFFD4AF37.toInt() else 0xFF35261A.toInt()
-            drawBorder(graphics, rx, rarityY, rw, 16, border)
-
-            val textCol = if (isSelected) 0xFFFFE8A3.toInt() else 0xFF9E8B75.toInt()
-            graphics.drawString(font, rLabel, rx + 5, rarityY + 4, textCol, false)
-            rx += rw + 4
-        }
+        val clippedCat = font.plainSubstrByWidth("Hábitat: ${biome.category}", titleMaxWidth)
+        graphics.drawString(font, clippedCat, rightX + 8, rightY + 20, 0xFF9E8B75.toInt(), false)
 
         // Horizontal separator line
-        graphics.fill(rightX + 6, rightY + 52, rightX + rightW - 6, rightY + 53, 0xFF3A2D22.toInt())
+        graphics.fill(rightX + 6, rightY + 32, rightX + rightW - 6, rightY + 33, 0xFF3A2D22.toInt())
 
         // --- POKEMON GRID (CUADRÍCULA DE 2 COLUMNAS) ---
-        val spawnsListY = rightY + 56
-        val spawnsListH = rightH - 60
+        val spawnsListY = rightY + 36
+        val spawnsListH = rightH - 40
         enableScaledScissor(graphics, rightX + 2, spawnsListY, rightX + rightW - 2, spawnsListY + spawnsListH)
-
-        val spawns = getFilteredSpawns()
-        if (spawns.isEmpty()) {
-            if (!BiomeLocatorClientState.biomeSpawnsCache.containsKey(biome.id)) {
-                graphics.drawCenteredString(font, "Consultando archivos de hábitat...", rightX + rightW / 2, spawnsListY + 36, 0xFFBCA789.toInt())
+        try {
+            val spawns = getFilteredSpawns()
+            if (spawns.isEmpty()) {
+                if (!BiomeLocatorClientState.biomeSpawnsCache.containsKey(biome.id)) {
+                    graphics.drawCenteredString(font, "Consultando archivos de hábitat...", rightX + rightW / 2, spawnsListY + 36, 0xFFBCA789.toInt())
+                } else {
+                    graphics.drawCenteredString(font, "No se registran especies silvestres en este hábitat.", rightX + rightW / 2, spawnsListY + 36, 0xFF7A6A5C.toInt())
+                }
             } else {
-                graphics.drawCenteredString(font, "No se registran especies silvestres en este hábitat.", rightX + rightW / 2, spawnsListY + 36, 0xFF7A6A5C.toInt())
-            }
-        } else {
-            val cardW = (rightW - 18) / 2
-            val cardH = 80
-            val cardGap = 6
-            val animAngle = ((System.currentTimeMillis() % 16000L) / 16000f) * 360f
+                val cardW = (rightW - 18) / 2
+                val cardH = 50
+                val cardGap = 5
+                val animAngle = ((System.currentTimeMillis() % 16000L) / 16000f) * 360f
 
-            for (i in spawns.indices) {
-                val col = i % 2
-                val row = i / 2
-                val cx = rightX + 6 + col * (cardW + 6)
-                val cy = spawnsListY + 4 + row * (cardH + cardGap) - rightScrollOffset.toInt()
+                for (i in spawns.indices) {
+                    val col = i % 2
+                    val row = i / 2
+                    val cx = rightX + 6 + col * (cardW + 6)
+                    val cy = spawnsListY + 4 + row * (cardH + cardGap) - rightScrollOffset.toInt()
 
-                if (cy + cardH < spawnsListY || cy > spawnsListY + spawnsListH) continue
+                    if (cy + cardH < spawnsListY || cy > spawnsListY + spawnsListH) continue
 
-                val spawn = spawns[i]
-                val (rarityCol, rarityBorder, rarityLabel) = when (spawn.bucket) {
-                    "ultra-rare" -> Triple(0xFFFFE57F.toInt(), 0xFFD4AF37.toInt(), "Ultra Raro")
-                    "rare" -> Triple(0xFFFF9BE8.toInt(), 0xFFC055A8.toInt(), "Raro")
-                    "uncommon" -> Triple(0xFF7CE7F5.toInt(), 0xFF359FB0.toInt(), "Poco común")
-                    else -> Triple(0xFF9DE6A6.toInt(), 0xFF4A8057.toInt(), "Común")
-                }
+                    val spawn = spawns[i]
 
-                // Check if this card matches the active search query
-                val isSearchHit = searchQuery.isNotBlank() && (spawn.displayName.lowercase().contains(searchQuery) || spawn.speciesId.lowercase().contains(searchQuery))
+                    // Check if this card matches the active search query
+                    val isSearchHit = searchQuery.isNotBlank() && (spawn.displayName.lowercase().contains(searchQuery) || spawn.speciesId.lowercase().contains(searchQuery))
 
-                // Card background (folio card)
-                val cardBg = if (isSearchHit) 0xFF2E2415.toInt() else 0xFF19130F.toInt()
-                val cardBorder = if (isSearchHit) 0xFFFFD700.toInt() else 0xFF3A2D22.toInt()
-                graphics.fill(cx, cy, cx + cardW, cy + cardH, cardBg)
-                drawBorder(graphics, cx, cy, cardW, cardH, cardBorder)
+                    // Card background (folio card)
+                    val cardBg = if (isSearchHit) 0xFF2E2415.toInt() else 0xFF19130F.toInt()
+                    val cardBorder = if (isSearchHit) 0xFFFFD700.toInt() else 0xFF3A2D22.toInt()
+                    graphics.fill(cx, cy, cx + cardW, cy + cardH, cardBg)
+                    drawBorder(graphics, cx, cy, cardW, cardH, cardBorder)
 
-                // Left decorative rarity strip
-                graphics.fill(cx, cy, cx + 3, cy + cardH, rarityBorder)
+                    // Left decorative gold strip (sin colores de rareza)
+                    graphics.fill(cx, cy, cx + 3, cy + cardH, if (isSearchHit) 0xFFFFD700.toInt() else 0xFFC59B27.toInt())
 
-                // 3D Mini Pokemon Specimen Frame (upper-left)
-                val modelBoxX = cx + 6
-                val modelBoxY = cy + 6
-                val modelBoxSize = 38
-                graphics.fill(modelBoxX, modelBoxY, modelBoxX + modelBoxSize, modelBoxY + modelBoxSize, 0xFF100D0B.toInt())
-                drawBorder(graphics, modelBoxX, modelBoxY, modelBoxSize, modelBoxSize, 0xFF2B2017.toInt())
+                    // 3D Mini Pokemon Specimen Frame (upper-left)
+                    val modelBoxX = cx + 6
+                    val modelBoxY = cy + 6
+                    val modelBoxSize = 38
+                    graphics.fill(modelBoxX, modelBoxY, modelBoxX + modelBoxSize, modelBoxY + modelBoxSize, 0xFF100D0B.toInt())
+                    drawBorder(graphics, modelBoxX, modelBoxY, modelBoxSize, modelBoxSize, 0xFF2B2017.toInt())
 
-                // STRICT SCISSOR FOR MODEL BOX: Prevents 3D model from EVER drawing outside the 38x38 box!
-                enableScaledScissor(graphics, modelBoxX + 1, modelBoxY + 1, modelBoxX + modelBoxSize - 1, modelBoxY + modelBoxSize - 1)
-                try {
-                    val rawRes = ResourceLocation.tryParse(spawn.speciesId.lowercase())
-                        ?: ResourceLocation.fromNamespaceAndPath("cobblemon", spawn.speciesId.lowercase())
-                    val speciesObj = PokemonSpecies.getByIdentifier(rawRes) ?: run {
-                        val cleanPath = rawRes.path
-                            .replace("_galarian", "").replace("-galarian", "").replace("_galar", "").replace("-galar", "")
-                            .replace("_alolan", "").replace("-alolan", "").replace("_alola", "").replace("-alola", "")
-                            .replace("_hisuian", "").replace("-hisuian", "").replace("_hisui", "").replace("-hisui", "")
-                            .replace("_paldean", "").replace("-paldean", "").replace("_paldea", "").replace("-paldea", "")
-                        PokemonSpecies.getByIdentifier(ResourceLocation.fromNamespaceAndPath(rawRes.namespace, cleanPath))
-                    }
-
-                    val aspects = mutableSetOf<String>()
-                    aspects.addAll(spawn.aspects.map { it.lowercase() })
-                    val checkStr = "${spawn.speciesId} ${spawn.displayName} ${spawn.aspects.joinToString(" ")}".lowercase()
-                    if (checkStr.contains("galar")) {
-                        aspects.add("galarian")
-                        aspects.add("galar")
-                    }
-                    if (checkStr.contains("hisui")) {
-                        aspects.add("hisuian")
-                        aspects.add("hisui")
-                    }
-                    if (checkStr.contains("alola")) {
-                        aspects.add("alolan")
-                        aspects.add("alola")
-                    }
-                    if (checkStr.contains("paldea")) {
-                        aspects.add("paldean")
-                        aspects.add("paldea")
-                    }
-                    if (checkStr.contains("valencia")) aspects.add("valencian")
-
-                    if (speciesObj != null) {
-                        val matchedForm = speciesObj.forms.firstOrNull { f ->
-                            val fn = f.name.lowercase()
-                            (aspects.contains("galarian") && (fn == "galar" || fn == "galarian")) ||
-                                (aspects.contains("hisuian") && (fn == "hisui" || fn == "hisuian")) ||
-                                (aspects.contains("alolan") && (fn == "alola" || fn == "alolan")) ||
-                                (aspects.contains("paldean") && (fn == "paldea" || fn == "paldean"))
+                    // STRICT SCISSOR FOR MODEL BOX: Prevents 3D model from EVER drawing outside the 38x38 box!
+                    enableScaledScissor(graphics, modelBoxX + 1, modelBoxY + 1, modelBoxX + modelBoxSize - 1, modelBoxY + modelBoxSize - 1)
+                    try {
+                        val rawRes = ResourceLocation.tryParse(spawn.speciesId.lowercase())
+                            ?: ResourceLocation.fromNamespaceAndPath("cobblemon", spawn.speciesId.lowercase())
+                        val speciesObj = PokemonSpecies.getByIdentifier(rawRes) ?: run {
+                            val cleanPath = rawRes.path
+                                .replace("_galarian", "").replace("-galarian", "").replace("_galar", "").replace("-galar", "")
+                                .replace("_alolan", "").replace("-alolan", "").replace("_alola", "").replace("-alola", "")
+                                .replace("_hisuian", "").replace("-hisuian", "").replace("_hisui", "").replace("-hisui", "")
+                                .replace("_paldean", "").replace("-paldean", "").replace("_paldea", "").replace("-paldea", "")
+                            PokemonSpecies.getByIdentifier(ResourceLocation.fromNamespaceAndPath(rawRes.namespace, cleanPath))
                         }
-                        if (matchedForm != null) {
-                            aspects.addAll(matchedForm.aspects.map { it.lowercase() })
+
+                        val aspects = mutableSetOf<String>()
+                        aspects.addAll(spawn.aspects.map { it.lowercase() })
+                        val checkStr = "${spawn.speciesId} ${spawn.displayName} ${spawn.aspects.joinToString(" ")}".lowercase()
+                        if (checkStr.contains("galar")) {
+                            aspects.add("galarian")
+                            aspects.add("galar")
                         }
+                        if (checkStr.contains("hisui")) {
+                            aspects.add("hisuian")
+                            aspects.add("hisui")
+                        }
+                        if (checkStr.contains("alola")) {
+                            aspects.add("alolan")
+                            aspects.add("alola")
+                        }
+                        if (checkStr.contains("paldea")) {
+                            aspects.add("paldean")
+                            aspects.add("paldea")
+                        }
+                        if (checkStr.contains("valencia")) aspects.add("valencian")
+
+                        if (speciesObj != null) {
+                            val matchedForm = speciesObj.forms.firstOrNull { f ->
+                                val fn = f.name.lowercase()
+                                (aspects.contains("galarian") && (fn == "galar" || fn == "galarian")) ||
+                                    (aspects.contains("hisuian") && (fn == "hisui" || fn == "hisuian")) ||
+                                    (aspects.contains("alolan") && (fn == "alola" || fn == "alolan")) ||
+                                    (aspects.contains("paldean") && (fn == "paldea" || fn == "paldean"))
+                            }
+                            if (matchedForm != null) {
+                                aspects.addAll(matchedForm.aspects.map { it.lowercase() })
+                            }
+                        }
+
+                        val stateKey = "${spawn.speciesId}#${aspects.sorted().joinToString(",")}"
+                        val cardState = cardStates.getOrPut(stateKey) { FloatingState() }
+                        cardState.currentAspects = aspects
+
+                        val cardRotation = Quaternionf()
+                            .rotationY(Math.toRadians(animAngle.toDouble()).toFloat())
+                            .rotateX(Math.toRadians(8.0).toFloat())
+
+                        graphics.pose().pushPose()
+                        try {
+                            graphics.pose().translate(modelBoxX + modelBoxSize / 2f, modelBoxY + 5.5f, 100f)
+                            if (speciesObj != null) {
+                                drawProfilePokemon(
+                                    renderablePokemon = RenderablePokemon(speciesObj, aspects),
+                                    matrixStack = graphics.pose(),
+                                    rotation = cardRotation,
+                                    poseType = PoseType.STAND,
+                                    state = cardState,
+                                    partialTicks = partialTick,
+                                    scale = 14.0f,
+                                    profileTransformType = ProfileTransformType.PROFILE
+                                )
+                            } else {
+                                drawProfilePokemon(
+                                    species = rawRes,
+                                    matrixStack = graphics.pose(),
+                                    rotation = cardRotation,
+                                    poseType = PoseType.STAND,
+                                    state = cardState,
+                                    partialTicks = partialTick,
+                                    scale = 14.0f,
+                                    profileTransformType = ProfileTransformType.PROFILE
+                                )
+                            }
+                        } finally {
+                            graphics.pose().popPose()
+                        }
+                        graphics.flush()
+                    } catch (_: Throwable) {
+                    } finally {
+                        graphics.disableScissor()
                     }
 
-                    val stateKey = "${spawn.speciesId}#${aspects.sorted().joinToString(",")}"
-                    val cardState = cardStates.getOrPut(stateKey) { FloatingState() }
-                    cardState.currentAspects = aspects
-
-                    val cardRotation = Quaternionf()
-                        .rotationY(Math.toRadians(animAngle.toDouble()).toFloat())
-                        .rotateX(Math.toRadians(8.0).toFloat())
-
-                    graphics.pose().pushPose()
-                    graphics.pose().translate(modelBoxX + modelBoxSize / 2f, modelBoxY + 5.5f, 100f)
-                    if (speciesObj != null) {
-                        drawProfilePokemon(
-                            renderablePokemon = RenderablePokemon(speciesObj, aspects),
-                            matrixStack = graphics.pose(),
-                            rotation = cardRotation,
-                            poseType = PoseType.STAND,
-                            state = cardState,
-                            partialTicks = partialTick,
-                            scale = 14.0f,
-                            profileTransformType = ProfileTransformType.PROFILE
-                        )
-                    } else {
-                        drawProfilePokemon(
-                            species = rawRes,
-                            matrixStack = graphics.pose(),
-                            rotation = cardRotation,
-                            poseType = PoseType.STAND,
-                            state = cardState,
-                            partialTicks = partialTick,
-                            scale = 14.0f,
-                            profileTransformType = ProfileTransformType.PROFILE
-                        )
-                    }
-                    graphics.pose().popPose()
-                    graphics.flush()
-                } catch (_: Throwable) {}
-                graphics.disableScissor()
-
-                // Pokemon Info (upper-right of card)
-                val infoX = cx + 48
-                val infoW = cardW - 52
-                val clippedName = font.plainSubstrByWidth(spawn.displayName, infoW)
-                graphics.drawString(font, clippedName, infoX, cy + 6, 0xFFFFFAEB.toInt(), false)
-
-                val lvlText = "Nv. ${spawn.minLevel}-${spawn.maxLevel}"
-                val clippedLvl = font.plainSubstrByWidth(lvlText, infoW)
-                graphics.drawString(font, clippedLvl, infoX, cy + 18, 0xFFBCA789.toInt(), false)
-
-                val pctText = "$rarityLabel • ${spawn.percentage}%"
-                val clippedPct = font.plainSubstrByWidth(pctText, infoW)
-                graphics.drawString(font, clippedPct, infoX, cy + 30, rarityCol, false)
-
-                // Lower section: Divider & Condition Badges
-                val condDividerY = cy + 48
-                graphics.fill(cx + 6, condDividerY, cx + cardW - 6, condDividerY + 1, 0xFF281E15.toInt())
-
-                val timeBadge = when (spawn.timeOfDay) {
-                    "Día" -> "Día"
-                    "Noche" -> "Noche"
-                    "Crepúsculo" -> "Ocaso"
-                    else -> "Cualquiera"
-                }
-                val contextBadge = when {
-                    spawn.context.contains("Agua") || spawn.context.contains("Pesca") -> "Agua"
-                    spawn.context.contains("Cueva") -> "Cueva"
-                    spawn.context.contains("Aire") -> "Aire"
-                    else -> "Tierra"
-                }
-
-                val condLine = "$timeBadge • $contextBadge"
-                val clippedCond = font.plainSubstrByWidth(condLine, cardW - 12)
-                graphics.drawString(font, clippedCond, cx + 6, cy + 52, 0xFF9E8B75.toInt(), false)
-
-                val extraInfo = if (spawn.weatherReq != "Cualquiera") "${spawn.weatherReq}" else if (spawn.lightReq != "Cualquiera") "${spawn.lightReq}" else ""
-                if (extraInfo.isNotBlank()) {
-                    val clippedExtra = font.plainSubstrByWidth(extraInfo, cardW - 12)
-                    graphics.drawString(font, clippedExtra, cx + 6, cy + 64, 0xFF7A6A5C.toInt(), false)
+                    // Solo nombre del Pokémon (sin rarezas, probabilidades ni condiciones)
+                    val infoX = cx + 48
+                    val infoW = cardW - 54
+                    val clippedName = font.plainSubstrByWidth(spawn.displayName, infoW)
+                    graphics.drawString(font, clippedName, infoX, cy + 21, 0xFFFFFAEB.toInt(), false)
                 }
             }
+        } finally {
+            graphics.disableScissor()
         }
-
-        graphics.disableScissor()
 
         // Right Scrollbar
         if (rightMaxScroll > 0) {

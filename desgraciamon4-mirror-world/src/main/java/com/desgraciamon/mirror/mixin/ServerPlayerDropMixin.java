@@ -1,7 +1,7 @@
 package com.desgraciamon.mirror.mixin;
 
 import com.desgraciamon.mirror.MirrorRules;
-import net.minecraft.network.chat.Component;
+import com.desgraciamon.mirror.MirrorSettings;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.item.ItemStack;
@@ -17,7 +17,7 @@ public abstract class ServerPlayerDropMixin {
         ServerPlayer player = (ServerPlayer) (Object) this;
         if (MirrorRules.INSTANCE.isMirror(player.level())) {
             player.getInventory().add(itemStack);
-            player.sendSystemMessage(Component.literal("§cNo puedes soltar objetos en el Mundo Espejo."));
+            player.sendSystemMessage(MirrorSettings.INSTANCE.text("protect.drop_blocked"));
             cir.setReturnValue(null);
         }
     }

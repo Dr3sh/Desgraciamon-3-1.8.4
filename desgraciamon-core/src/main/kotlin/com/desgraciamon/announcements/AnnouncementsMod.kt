@@ -1,9 +1,14 @@
 package com.desgraciamon.announcements
 
+import com.cobblemon.mod.common.api.Priority
 import com.cobblemon.mod.common.api.events.CobblemonEvents
 import com.cobblemon.mod.common.api.events.battles.BattleFaintedEvent
+import com.cobblemon.mod.common.api.events.battles.BattleVictoryEvent
 import com.cobblemon.mod.common.api.events.pokemon.PokemonCapturedEvent
+import com.cobblemon.mod.common.api.events.pokemon.evolution.EvolutionCompleteEvent
 import com.cobblemon.mod.common.battles.actor.PlayerBattleActor
+import com.desgraciamon.badges.RctProgressBridge
+import com.desgraciamon.economy.CobbleDollarsBridge
 import com.mojang.brigadier.CommandDispatcher
 import com.mojang.brigadier.arguments.IntegerArgumentType
 import com.mojang.brigadier.arguments.StringArgumentType
@@ -55,11 +60,15 @@ class AnnouncementsMod : ModInitializer {
                     .requires { it.player != null && com.desgraciamon.badges.AdminAuth.hasAdminBadge(it.player!!.uuid) }
                     .executes { ctx ->
                         val player = ctx.source.playerOrException
+                        if (!com.desgraciamon.badges.AdminAuth.hasAdminBadge(player.uuid)) {
+                            ctx.source.sendFailure(Component.literal("§cNo tienes permiso para usar /modoadmin."))
+                            return@executes 0
+                        }
                         val active = com.desgraciamon.badges.AdminAuth.toggleAdminMode(player)
                         if (active) {
-                            ctx.source.sendSuccess({ Component.literal("§a[Desgraciamon] Modo Admin activado. Ahora puedes editar anuncios, misiones e hitos.") }, false)
+                            ctx.source.sendSuccess({ Component.literal("§a[Desgraciamon] Modo Admin ACTIVADO. Permisos de comandos y herramientas habilitados.") }, false)
                         } else {
-                            ctx.source.sendSuccess({ Component.literal("§c[Desgraciamon] Modo Admin desactivado (sigues conservando tus permisos de administrador).") }, false)
+                            ctx.source.sendSuccess({ Component.literal("§c[Desgraciamon] Modo Admin DESACTIVADO. Permisos de comandos desactivados (conservas tu insignia; usa /modoadmin para reactivarlos).") }, false)
                         }
                         1
                     }
@@ -147,10 +156,18 @@ class AnnouncementsMod : ModInitializer {
         ServerPlayConnectionEvents.JOIN.register { handler, _, _ ->
             val current = ContainerItemScanner.countItems(handler.player)
             lastInventories[handler.player.uuid] = current
+            if (CobbleDollarsBridge.isAvailable()) {
+                lastBalances[handler.player.uuid] = CobbleDollarsBridge.getBalance(handler.player).toLong()
+            }
+            lastDefeatedRctTrainers[handler.player.uuid] = RctProgressBridge.readFor(handler.player).defeatedTrainerIds
             BulletinStore.sync(handler.player, isJoinSync = true)
             BulletinStore.reconcilePlayerItems(handler.player, current)
         }
-        ServerPlayConnectionEvents.DISCONNECT.register { handler, _ -> lastInventories.remove(handler.player.uuid) }
+        ServerPlayConnectionEvents.DISCONNECT.register { handler, _ ->
+            lastInventories.remove(handler.player.uuid)
+            lastBalances.remove(handler.player.uuid)
+            lastDefeatedRctTrainers.remove(handler.player.uuid)
+        }
         ServerPlayNetworking.registerGlobalReceiver(BulletinActionPayload.TYPE) { payload, context ->
             context.server().execute { BulletinStore.action(context.player(), payload.action, payload.id) }
         }
@@ -213,8 +230,15 @@ class AnnouncementsMod : ModInitializer {
 
         CobblemonEvents.POKEMON_CAPTURED.subscribe(::onPokemonCaptured)
         CobblemonEvents.BATTLE_FAINTED.subscribe(::onPokemonDefeated)
+        CobblemonEvents.EVOLUTION_COMPLETE.subscribe(::onPokemonEvolved)
+        CobblemonEvents.BATTLE_VICTORY.subscribe(Priority.HIGH, ::onBattleVictory)
         ServerTickEvents.END_SERVER_TICK.register { server ->
-            if (++inventoryPoll % 20 == 0) server.playerList.players.forEach(::updateItemProgress)
+            if (++inventoryPoll % 20 == 0) {
+                server.playerList.players.forEach { player ->
+                    updateItemProgress(player)
+                    updateMoneyProgress(player)
+                }
+            }
         }
     }
 
@@ -234,7 +258,69 @@ class AnnouncementsMod : ModInitializer {
         }
     }
 
+    private fun onPokemonEvolved(event: EvolutionCompleteEvent) {
+        val owner = event.pokemon.getOwnerPlayer() ?: return
+        val initialSpeciesId = event.sourcePokemon.species.resourceIdentifier.toString()
+        BulletinStore.progressEvolution(owner, initialSpeciesId)
+    }
+
+    private fun onBattleVictory(event: BattleVictoryEvent) {
+        val winnerPlayers = event.winners.filterIsInstance<PlayerBattleActor>().mapNotNull { it.entity }
+        if (winnerPlayers.isEmpty()) return
+
+        val showdownMeta = runCatching {
+            Class.forName("com.desgraciamon.showdownarena.ShowdownArenaCommands")
+                .getMethod("getBattleMeta", java.util.UUID::class.java)
+                .invoke(null, event.battle.battleId)
+        }.getOrNull()
+
+        if (showdownMeta != null) {
+            winnerPlayers.forEach { BulletinStore.progressShowdownWin(it) }
+            return
+        }
+
+        if (event.battle.isPvP) {
+            winnerPlayers.forEach { BulletinStore.progressPvpWin(it) }
+            return
+        }
+
+        // Detectar victoria contra NPC de rctmod (tanto primer combate como revancha)
+        val rctTrainerIds = resolveRctBattleTrainerIds(event.battle.battleId)
+        for (player in winnerPlayers) {
+            val prevDefeated = lastDefeatedRctTrainers[player.uuid].orEmpty()
+            val currDefeated = RctProgressBridge.readFor(player).defeatedTrainerIds
+            lastDefeatedRctTrainers[player.uuid] = currDefeated
+            val newlyDefeated = currDefeated - prevDefeated
+
+            when {
+                rctTrainerIds.isNotEmpty() -> rctTrainerIds.forEach { BulletinStore.progressRctNpcWin(player, it) }
+                newlyDefeated.isNotEmpty() -> newlyDefeated.forEach { BulletinStore.progressRctNpcWin(player, it) }
+            }
+        }
+    }
+
+    private fun resolveRctBattleTrainerIds(battleId: java.util.UUID): List<String> {
+        return runCatching {
+            val rctClass = Class.forName("com.gitlab.srcmc.rctmod.api.RCTMod")
+            val rctInstance = rctClass.getMethod("getInstance").invoke(null) ?: return emptyList()
+            val tm = rctInstance.javaClass.getMethod("getTrainerManager").invoke(rctInstance) ?: return emptyList()
+            val opt = tm.javaClass.getMethod("getBattle", java.util.UUID::class.java).invoke(tm, battleId) as? java.util.Optional<*> ?: return emptyList()
+            val battle = opt.orElse(null) ?: return emptyList()
+            val mobs = battle.javaClass.getMethod("getTrainerSideMobs").invoke(battle) as? Collection<*> ?: return emptyList()
+            mobs.mapNotNull { mob ->
+                if (mob == null) null else runCatching {
+                    val data = tm.javaClass.getMethod("getData", mob.javaClass).invoke(tm, mob)
+                    data?.javaClass?.getMethod("getTrainerId")?.invoke(data) as? String
+                }.getOrNull() ?: runCatching {
+                    mob.javaClass.getMethod("getTrainerId").invoke(mob) as? String
+                }.getOrNull() ?: ""
+            }.ifEmpty { listOf("") }
+        }.getOrDefault(emptyList())
+    }
+
     private val lastInventories = mutableMapOf<java.util.UUID, Map<String, Int>>()
+    private val lastBalances = mutableMapOf<java.util.UUID, Long>()
+    private val lastDefeatedRctTrainers = mutableMapOf<java.util.UUID, Set<String>>()
     private var inventoryPoll = 0
 
     private fun updateItemProgress(player: ServerPlayer) {
@@ -245,6 +331,18 @@ class AnnouncementsMod : ModInitializer {
             if (gained > 0) BulletinStore.progressItem(player, id, gained)
         }
         BulletinStore.reconcilePlayerItems(player, current)
+    }
+
+    private fun updateMoneyProgress(player: ServerPlayer) {
+        if (!CobbleDollarsBridge.isAvailable()) return
+        val current = CobbleDollarsBridge.getBalance(player).toLong()
+        val previous = lastBalances.put(player.uuid, current) ?: return
+        val delta = current - previous
+        if (delta > 0L) {
+            BulletinStore.progressMoneyEarned(player, delta)
+        } else if (delta < 0L) {
+            BulletinStore.progressMoneySpent(player, -delta)
+        }
     }
 
     companion object {

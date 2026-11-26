@@ -44,9 +44,8 @@ class NotificationAndSyncPayloadTest {
 
         assertEquals(1, keybinds.size)
         assertEquals("key.desgraciamon4_announcements.open", keybinds.first().name)
-        assertTrue(comp.string.contains("Nueva misión diaria disponible"))
-        assertTrue(comp.string.contains("Pulsa ["))
-        assertTrue(comp.string.contains("para verla."))
+        assertTrue(comp.string.contains("Hay una nueva misión diaria"))
+        assertTrue(comp.string.contains("revísala con la tecla ["))
 
         val coloredPart = comp.siblings.firstOrNull { it.style.color != null }
         assertEquals(0x38BDF8, coloredPart?.style?.color?.value)

@@ -22,9 +22,15 @@ class LegendaryBestiaryMod : ModInitializer {
     override fun onInitialize() {
         PayloadTypeRegistry.playS2C().register(LegendaryBestiaryPayload.TYPE, LegendaryBestiaryPayload.CODEC)
         PayloadTypeRegistry.playC2S().register(LegendaryBestiaryRequest.TYPE, LegendaryBestiaryRequest.CODEC)
-        ServerPlayConnectionEvents.JOIN.register { handler, _, _ -> sendEntries(handler.player) }
+        ServerPlayConnectionEvents.JOIN.register { handler, _, _ ->
+            refreshOnlineOwners(handler.player.server)
+            sendEntries(handler.player)
+        }
         ServerPlayNetworking.registerGlobalReceiver(LegendaryBestiaryRequest.TYPE) { _, context ->
-            context.server().execute { sendEntries(context.player()) }
+            context.server().execute {
+                refreshOnlineOwners(context.server())
+                sendEntries(context.player())
+            }
         }
         CobblemonEvents.THROWN_POKEBALL_HIT.subscribe(::onPokeballHit)
         CobblemonEvents.POKE_BALL_CAPTURE_CALCULATED.subscribe(::onCaptureCalculated)
@@ -147,6 +153,32 @@ class LegendaryBestiaryMod : ModInitializer {
             data.updateOwner("$baseSpeciesId#$canonicalForm", currentOwner = current, originalOwner = original)
         }
         server.playerList.players.forEach(::sendEntries)
+    }
+
+    private fun refreshOnlineOwners(server: MinecraftServer) {
+        val data = LegendaryBestiaryData.get(server)
+        for (player in server.playerList.players) {
+            val currentName = player.name.string
+            val party = runCatching { Cobblemon.storage.getParty(player) }.getOrNull()
+            val pc = runCatching { Cobblemon.storage.getPC(player) }.getOrNull()
+            val allMons = buildList {
+                if (party != null) for (p in party) add(p)
+                if (pc != null) for (p in pc) add(p)
+            }
+            for (pokemon in allMons) {
+                if (pokemon.isUltraBeast() || LegendaryBestiaryData.isUltraBeast(pokemon.species)) continue
+                if (!pokemon.isLegendary() && !pokemon.isMythical()) continue
+                val baseSpeciesId = pokemon.species.resourceIdentifier.toString()
+                val formName = pokemon.form.name.lowercase().trim()
+                val key = if (LegendaryBestiaryData.isNotableForm(formName)) "$baseSpeciesId#$formName" else baseSpeciesId
+                val original = pokemon.originalTrainerName?.takeIf { it.isNotBlank() }
+                data.updateOwner(key, currentOwner = currentName, originalOwner = original)
+                if (LegendaryBestiaryData.isNotableForm(formName)) {
+                    val canonicalForm = LegendaryBestiaryData.normalizeFormKey(formName)
+                    data.updateOwner("$baseSpeciesId#$canonicalForm", currentOwner = currentName, originalOwner = original)
+                }
+            }
+        }
     }
 
     private fun sendEntries(player: ServerPlayer) {

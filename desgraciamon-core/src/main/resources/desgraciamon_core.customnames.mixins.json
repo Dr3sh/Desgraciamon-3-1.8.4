@@ -11,7 +11,8 @@
     "EntitySelectorParserMixin"
   ],
   "client": [
-    "GuiTabListMixin"
+    "GuiTabListMixin",
+    "PlayerTabOverlayPingMixin"
   ],
   "injectors": {
     "defaultRequire": 1

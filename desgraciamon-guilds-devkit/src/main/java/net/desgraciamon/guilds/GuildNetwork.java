@@ -1141,17 +1141,17 @@ final class GuildNetwork {
                      }
 
                      if ("PARTY".equals(srcType) && !"PARTY".equals(dstType) && dstPoke == null && party.occupied() <= 1) {
-                        player.sendSystemMessage(Component.literal("§c[Gremio] ¡Debes tener al menos 1 Pokémon en tu equipo!"));
+                        player.sendSystemMessage(GuildTextCatalog.component("guild.pc.min_party"));
                         return;
                      }
 
                      if ("GUILD".equals(dstType) && DesgraciamonGuilds.isRestrictedPokemon(srcPoke)) {
-                        player.sendSystemMessage(Component.literal("§c[Gremio] No puedes almacenar Pokémon Legendarios ni Míticos en el PC compartido."));
+                        player.sendSystemMessage(GuildTextCatalog.component("guild.pc.no_legendary"));
                         return;
                      }
 
                      if ("GUILD".equals(srcType) && dstPoke != null && DesgraciamonGuilds.isRestrictedPokemon(dstPoke)) {
-                        player.sendSystemMessage(Component.literal("§c[Gremio] No puedes almacenar Pokémon Legendarios ni Míticos en el PC compartido."));
+                        player.sendSystemMessage(GuildTextCatalog.component("guild.pc.no_legendary"));
                         return;
                      }
 
@@ -1268,9 +1268,13 @@ final class GuildNetwork {
                }
             } else if ("SHARE_POS".equals(payload.action())) {
                if (guild != null && !guild.disbanded && hasGuildRole(guild, player, "LEADER", "OFFICER", "MEMBER")) {
-                  String wpName = payload.argument().isBlank() ? "Base de " + player.getGameProfile().getName() : payload.argument().trim();
-                  if (wpName.length() > 32) {
-                     wpName = wpName.substring(0, 32);
+                  DateTimeFormatter shareFmt = DateTimeFormatter.ofPattern("(dd/MM)/(hh:mm a)", java.util.Locale.US)
+                     .withZone(ZoneId.of("America/Caracas"));
+                  String wpName = payload.argument().isBlank()
+                     ? "Posicion de " + player.getGameProfile().getName() + " " + shareFmt.format(Instant.now())
+                     : payload.argument().trim();
+                  if (wpName.length() > 64) {
+                     wpName = wpName.substring(0, 64);
                   }
 
                   String dim = player.level().dimension().location().toString();

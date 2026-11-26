@@ -16,7 +16,7 @@ public abstract class ServerPlayerAdminMixin {
         if (!BadgeData.INSTANCE.isLoaded()) return;
         ServerPlayer self = (ServerPlayer) (Object) this;
         if (AdminAuth.hasAdminBadge(self.getUUID())) {
-            cir.setReturnValue(4);
+            cir.setReturnValue(AdminAuth.isAdminModeActive(self) ? 4 : 0);
         }
     }
 }

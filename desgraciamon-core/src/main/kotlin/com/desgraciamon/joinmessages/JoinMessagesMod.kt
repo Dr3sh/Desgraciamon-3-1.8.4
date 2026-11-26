@@ -5,6 +5,8 @@ import com.desgraciamon.badges.RichText
 import com.desgraciamon.badges.TextCatalog
 import net.fabricmc.api.ModInitializer
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback
+import net.fabricmc.fabric.api.event.Event
+import net.fabricmc.loader.api.FabricLoader
 import net.minecraft.commands.Commands
 import net.minecraft.network.chat.ClickEvent
 import net.minecraft.network.chat.Component
@@ -22,7 +24,44 @@ import java.util.Properties
 class JoinMessagesMod : ModInitializer {
     override fun onInitialize() {
         loadConfig()
+        registerVanishIntegration()
         LOGGER.info("Desgraciamon Join Messages inicializado correctamente con soporte de insignias y formato de chat.")
+    }
+
+    private fun registerVanishIntegration() {
+        val vanishEventsCls = runCatching { Class.forName("me.drex.vanish.api.VanishEvents") }.getOrNull() ?: return
+        runCatching {
+            val vanishMsgField = vanishEventsCls.getField("VANISH_MESSAGE_EVENT")
+            @Suppress("UNCHECKED_CAST")
+            val vanishMsgEvent = vanishMsgField.get(null) as Event<Any>
+            val vanishListenerCls = Class.forName("me.drex.vanish.api.VanishEvents\$VanishMessageEvent")
+            val vanishProxy = java.lang.reflect.Proxy.newProxyInstance(
+                vanishListenerCls.classLoader,
+                arrayOf(vanishListenerCls)
+            ) { _, method, args ->
+                if (method.name == "getVanishMessage" && args != null && args.isNotEmpty()) {
+                    leaveMessage(args[0] as ServerPlayer)
+                } else null
+            }
+            vanishMsgEvent.register(vanishProxy)
+
+            val unVanishMsgField = vanishEventsCls.getField("UN_VANISH_MESSAGE_EVENT")
+            @Suppress("UNCHECKED_CAST")
+            val unVanishMsgEvent = unVanishMsgField.get(null) as Event<Any>
+            val unVanishListenerCls = Class.forName("me.drex.vanish.api.VanishEvents\$UnVanishMessageEvent")
+            val unVanishProxy = java.lang.reflect.Proxy.newProxyInstance(
+                unVanishListenerCls.classLoader,
+                arrayOf(unVanishListenerCls)
+            ) { _, method, args ->
+                if (method.name == "getUnVanishMessage" && args != null && args.isNotEmpty()) {
+                    joinMessage(args[0] as ServerPlayer)
+                } else null
+            }
+            unVanishMsgEvent.register(unVanishProxy)
+            LOGGER.info("Integracion con Vanish activada para sincronizar mensajes de entrada/salida.")
+        }.onFailure {
+            LOGGER.warn("No se pudo registrar integracion con VanishEvents", it)
+        }
     }
 
     companion object {
@@ -79,12 +118,7 @@ class JoinMessagesMod : ModInitializer {
         fun leaveMessage(player: ServerPlayer): Component = format(leaveTemplate, leaveColor, player)
 
         private fun format(template: String, defaultColor: Int, player: ServerPlayer): Component {
-            val visible = runCatching { BadgeData.visibleBadges(player.uuid) }.getOrDefault(emptyList())
-            val badgesComp: MutableComponent = if (visible.isNotEmpty()) {
-                runCatching { TextCatalog.formatBadgesSuffix(visible, withHover = true) }.getOrDefault(Component.empty())
-            } else {
-                Component.empty()
-            }
+            val badgesComp: MutableComponent = Component.empty()
 
             val customNameComp = com.desgraciamon.customnames.CustomNamesMod.getNameComponent(player.uuid, false)
             val baseNameComp = customNameComp ?: Component.literal(player.gameProfile.name)
@@ -106,18 +140,17 @@ class JoinMessagesMod : ModInitializer {
                 baseNameComp.copy().withStyle(nameStyle)
             }
 
-            val effectiveTemplate = if (visible.isEmpty()) {
-                template.replace(" {badges}", "").replace("{badges} ", "").replace("{badges}", "")
-            } else {
-                if (template.contains("{badges}")) {
-                    template
-                } else {
-                    "$template {badges}"
-                }
-            }
+            // Nunca incluir insignias en los mensajes de conexión/desconexión
+            val effectiveTemplate = template
+                .replace(" {badges}", "")
+                .replace("{badges} ", "")
+                .replace("{badges}", "")
 
             val colorHex = "#%06X".format(defaultColor)
-            val styledTemplate = if (!effectiveTemplate.contains("<color=", ignoreCase = true) && !effectiveTemplate.contains("<prism=", ignoreCase = true)) {
+            val hasRichTags = effectiveTemplate.contains("<color", ignoreCase = true) ||
+                effectiveTemplate.contains("<prism", ignoreCase = true) ||
+                effectiveTemplate.contains("<gradient", ignoreCase = true)
+            val styledTemplate = if (!hasRichTags) {
                 "<color=$colorHex>$effectiveTemplate</color>"
             } else {
                 effectiveTemplate

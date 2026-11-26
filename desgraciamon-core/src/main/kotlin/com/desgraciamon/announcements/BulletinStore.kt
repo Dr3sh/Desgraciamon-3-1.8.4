@@ -61,6 +61,7 @@ object BulletinStore {
     private var remoteEtag: String? = null
     private var lastPollTick = 0L
     private var dailyEvalTick = 0L
+    private val publishedMissionIds = ConcurrentHashMap.newKeySet<String>()
     @Volatile var document = BulletinDocument()
         private set
 
@@ -147,6 +148,18 @@ object BulletinStore {
                 }
                 if (progressChanged) saveProgress()
             }
+
+            // Detectar misiones programadas cuya hora en Venezuela (UTC-4) acaba de llegar
+            val nowCaracas = java.time.ZonedDateTime.now(Mission.DEFAULT_ZONE_ID)
+            var newlyPublishedAny = false
+            for (mission in document.missions) {
+                if (mission.isPublished(Mission.DEFAULT_ZONE_ID, nowCaracas) && publishedMissionIds.add(mission.id)) {
+                    newlyPublishedAny = true
+                }
+            }
+            if (newlyPublishedAny) {
+                activeServer?.playerList?.players?.forEach { sync(it, isJoinSync = false) }
+            }
         }
 
         val sourcePollInterval = if (sourceSettings.mode == "github") 100L else 40L
@@ -209,6 +222,11 @@ object BulletinStore {
                     try {
                         if (activeServer === targetServer) {
                             document = parsed
+                            val nowCaracas = java.time.ZonedDateTime.now(Mission.DEFAULT_ZONE_ID)
+                            publishedMissionIds.clear()
+                            parsed.missions.filter { it.isPublished(Mission.DEFAULT_ZONE_ID, nowCaracas) }.forEach {
+                                publishedMissionIds.add(it.id)
+                            }
                             fileDigest = digest
                             lastSourceError = ""
                             targetServer.playerList.players.forEach { sync(it, isJoinSync = false) }
@@ -298,8 +316,10 @@ object BulletinStore {
         state.knownAnnouncementIds.addAll(state.readIds)
         state.knownMissionIds.addAll(state.readMissionIds)
 
+        val nowCaracas = java.time.ZonedDateTime.now(Mission.DEFAULT_ZONE_ID)
+        val publishedMissions = document.missions.filter { it.isPublished(Mission.DEFAULT_ZONE_ID, nowCaracas) }
         val newAnnouncements = document.announcements.filter { it.id !in state.knownAnnouncementIds && it.id !in state.readIds }
-        val newMissions = document.missions.filter { it.id !in state.knownMissionIds && it.id !in state.readMissionIds }
+        val newMissions = publishedMissions.filter { !it.isExpired(Mission.DEFAULT_ZONE_ID, nowCaracas) && it.id !in state.knownMissionIds && it.id !in state.readMissionIds }
         val newAnnouncementCount = newAnnouncements.size
         val newMissionCount = newMissions.size
         val hudAnnouncementIds = if (isJoinSync) emptyList() else newAnnouncements.filter { it.showInHud }.map { it.id }
@@ -309,36 +329,34 @@ object BulletinStore {
                 val keyComp = Component.keybind("key.desgraciamon4_announcements.open")
                     .withStyle(net.minecraft.ChatFormatting.YELLOW, net.minecraft.ChatFormatting.BOLD)
                 val msg = when {
-                    newAnnouncementCount > 0 && newMissionCount > 0 -> {
-                        Component.literal("§6[Desgraciamon] §eHay §f$newAnnouncementCount §eanuncios y §f$newMissionCount §emisiones nuevas. ¡Revisa con la tecla ")
-                            .append(keyComp)
-                            .append(Component.literal("§e!"))
-                    }
-                    newAnnouncementCount > 0 -> {
-                        Component.literal("§6[Desgraciamon] §eHay §f$newAnnouncementCount §eanuncios nuevos. ¡Revisa con la tecla ")
-                            .append(keyComp)
-                            .append(Component.literal("§e!"))
-                    }
-                    else -> {
-                        Component.literal("§6[Desgraciamon] §eHay §f$newMissionCount §emisiones nuevas. ¡Revisa con la tecla ")
-                            .append(keyComp)
-                            .append(Component.literal("§e!"))
-                    }
+                    newAnnouncementCount > 0 && newMissionCount > 0 -> TextCatalog.component(
+                        "join.new_both",
+                        "announcements" to newAnnouncementCount,
+                        "missions" to newMissionCount,
+                        "key" to keyComp
+                    )
+                    newAnnouncementCount > 0 -> TextCatalog.component(
+                        "join.new_announcements",
+                        "announcements" to newAnnouncementCount,
+                        "key" to keyComp
+                    )
+                    else -> TextCatalog.component(
+                        "join.new_missions",
+                        "missions" to newMissionCount,
+                        "key" to keyComp
+                    )
                 }
                 player.sendSystemMessage(msg)
             } else {
-                for (mission in newMissions) {
-                    sendMissionToChat(player, mission)
+                // Misiones nuevas online: solo aviso conciso en rojo vino con tecla en negrita (sin titulo ni descripcion)
+                if (newMissions.isNotEmpty()) {
+                    player.sendSystemMessage(TextCatalog.missionPublishedComponent())
                 }
-                for (ann in newAnnouncements) {
-                    if (ann.showInChat) {
-                        sendAnnouncementToChat(player, ann)
-                    }
-                }
+                // Anuncios nuevos online: NO enviar aviso al chat si el jugador ya esta dentro del servidor
             }
 
             document.announcements.forEach { state.knownAnnouncementIds.add(it.id) }
-            document.missions.forEach { state.knownMissionIds.add(it.id) }
+            publishedMissions.forEach { state.knownMissionIds.add(it.id) }
             saveProgress()
             if (newMissionCount > 0 && !isJoinSync) playMissionAnimation(player, completed = false)
         }
@@ -349,10 +367,20 @@ object BulletinStore {
             bonusClaimedCycle = state.dailyBonusClaimedCycle,
             bonusConfig = DailyMissionCatalog.dailyBonus()
         )
+        // Ocultar por completo las misiones programadas que aun no llegan a su hora de salida a jugadores normales
+        val clientDoc = if (state.adminMode) {
+            document
+        } else {
+            BulletinDocument(
+                schemaVersion = document.schemaVersion,
+                announcements = document.announcements,
+                missions = publishedMissions.toMutableList()
+            )
+        }
         ServerBulletinNetworking.sendSnapshot(
             player,
             ClientBulletinSnapshot(
-                document = document,
+                document = clientDoc,
                 state = state.copyDeep(),
                 newAnnouncementCount = newAnnouncementCount,
                 newMissionCount = newMissionCount,
@@ -385,7 +413,7 @@ object BulletinStore {
     fun sendMissionToChat(player: ServerPlayer, mission: Mission) {
         val bodyHex = mission.bodyColor.ifBlank { "#E5ECE8" }
         val prefix = if (mission.isGuildMission) "[Gremio]" else "[Nueva Misión]"
-        player.sendSystemMessage(Component.literal("§a$prefix §f${mission.title}"))
+        player.sendSystemMessage(TextCatalog.component("mission.chat_header", "prefix" to prefix, "title" to mission.title))
         if (mission.body.isNotBlank()) {
             player.sendSystemMessage(Component.empty())
             for (line in mission.body.lines()) {
@@ -562,6 +590,7 @@ object BulletinStore {
 
     fun isMissionActiveForPlayer(mission: Mission, state: PlayerBulletinState): Boolean {
         if (mission.id in state.completedMissions) return false
+        if (!mission.isPublished()) return false
         if (mission.isExpired()) return false
         if (mission.isGuildMission && state.playerGuildId.isBlank()) return false
         if (mission.dailySlot in 1..3) {
@@ -655,6 +684,50 @@ object BulletinStore {
         updateProgress(player, ObjectiveType.OBTAIN_BADGE, 1) { target ->
             target.badgeId.equals(badgeId, ignoreCase = true)
         }
+    }
+
+    fun progressEvolution(player: ServerPlayer, initialSpeciesId: String) {
+        val normInitial = normalizeSpeciesId(initialSpeciesId)
+        updateProgress(player, ObjectiveType.EVOLVE_SPECIES, 1) { target ->
+            target.pokemonId.isBlank() || normalizeSpeciesId(target.pokemonId) == normInitial
+        }
+    }
+
+    fun progressPvpWin(player: ServerPlayer) {
+        updateProgress(player, ObjectiveType.WIN_PVP, 1) { true }
+        updateProgress(player, ObjectiveType.WIN_PVP_OR_SHOWDOWN, 1) { true }
+    }
+
+    fun progressShowdownWin(player: ServerPlayer) {
+        updateProgress(player, ObjectiveType.WIN_SHOWDOWN, 1) { true }
+        updateProgress(player, ObjectiveType.WIN_PVP_OR_SHOWDOWN, 1) { true }
+    }
+
+    fun progressRctNpcWin(player: ServerPlayer, trainerId: String) {
+        val normTrainer = trainerId.trim().lowercase()
+        updateProgress(player, ObjectiveType.DEFEAT_RCT_NPC, 1) { target ->
+            target.pokemonId.isBlank() || target.pokemonId.trim().lowercase() == normTrainer
+        }
+    }
+
+    fun progressCraft(player: ServerPlayer, itemId: String, count: Int) {
+        if (count <= 0) return
+        val normalizedTarget = normalizeItemId(itemId)
+        updateProgress(player, ObjectiveType.CRAFT_ITEM, count) { target ->
+            target.itemId.isBlank() || normalizeItemId(target.itemId) == normalizedTarget
+        }
+    }
+
+    fun progressMoneyEarned(player: ServerPlayer, delta: Long) {
+        if (delta <= 0L) return
+        val amount = delta.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+        updateProgress(player, ObjectiveType.EARN_MONEY, amount) { true }
+    }
+
+    fun progressMoneySpent(player: ServerPlayer, delta: Long) {
+        if (delta <= 0L) return
+        val amount = delta.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+        updateProgress(player, ObjectiveType.SPEND_MONEY, amount) { true }
     }
 
     private fun updatePokemonObjectives(player: ServerPlayer, type: ObjectiveType, pokemon: Pokemon) {
@@ -850,9 +923,26 @@ object BulletinStore {
                 changed = true
             } else if (anyObjectiveUpdatedInThisMission && !complete) {
                 val tag = if (isGuild) "[Gremio]" else "[Misión]"
-                player.sendSystemMessage(Component.literal("§a$tag §f${mission.title} §7- §e$updatedObjectiveLabel: §b$updatedObjectiveCur/$updatedObjectiveMax"))
+                player.sendSystemMessage(
+                    TextCatalog.component(
+                        "mission.objective_progress",
+                        "tag" to tag,
+                        "title" to mission.title,
+                        "label" to updatedObjectiveLabel,
+                        "current" to updatedObjectiveCur,
+                        "max" to updatedObjectiveMax
+                    )
+                )
                 if (justCompletedAnObjective && objectives.size > 1) {
-                    player.sendSystemMessage(Component.literal("§a$tag §f${mission.title} §7- §a¡Objetivo completado! ($completedObjectivesCount/${objectives.size} objetivos)"))
+                    player.sendSystemMessage(
+                        TextCatalog.component(
+                            "mission.objective_completed",
+                            "tag" to tag,
+                            "title" to mission.title,
+                            "completed" to completedObjectivesCount,
+                            "total" to objectives.size
+                        )
+                    )
                 }
             }
         }
@@ -918,10 +1008,10 @@ object BulletinStore {
 
     private fun validMission(value: Mission): Boolean {
         if (value.id.isBlank() || value.title.isBlank()) return false
-        if (value.color.isBlank()) value.color = "#68D7A2"
+        if (value.color.isBlank()) value.color = "#B91C3C"
         if (value.bodyColor.isBlank()) value.bodyColor = "#E5ECE8"
-        return value.amount in 1..100000 && value.moneyReward in 0L..MAX_MONEY_REWARD &&
-            value.objectives.size <= MAX_MISSION_OBJECTIVES && value.objectives.all { it.id.isNotBlank() && it.amount in 1..100000 }
+        return value.amount in 1..1_000_000_000 && value.moneyReward in 0L..MAX_MONEY_REWARD &&
+            value.objectives.size <= MAX_MISSION_OBJECTIVES && value.objectives.all { it.id.isNotBlank() && it.amount in 1..1_000_000_000 }
     }
 
     fun forceReload() {

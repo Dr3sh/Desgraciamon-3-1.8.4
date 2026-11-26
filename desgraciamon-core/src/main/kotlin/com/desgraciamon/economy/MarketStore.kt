@@ -48,6 +48,15 @@ object MarketStore {
             default
         }
 
+        if (config.resetIntervalDays <= 0) {
+            config.resetIntervalDays = 2
+        } else {
+            config.resetIntervalDays = config.resetIntervalDays.coerceIn(1, 30)
+        }
+        if (config.resetHourVet !in 0..23) {
+            config.resetHourVet = 8
+        }
+
         // Cargar estado de oferta/demanda
         state = if (stateFile.exists()) {
             runCatching {
@@ -88,7 +97,10 @@ object MarketStore {
     private fun createDefaultConfig(): MarketConfig {
         val cfg = MarketConfig(
             decayIntervalMinutes = 10,
-            decayRate = 0.05
+            decayRate = 0.05,
+            resetIntervalHours = 48,
+            resetIntervalDays = 2,
+            resetHourVet = 8
         )
 
         fun item(id: String, base: Double, minRatio: Double = 0.20, maxRatio: Double = 2.0, sat: Double = 64.0, name: String? = null) {

@@ -244,18 +244,29 @@ class ScreenAnimationsMod : ModInitializer {
         }
 
         var count = 0
-        if (instantTargets.isNotEmpty()) {
-            val instantPayload = AnimationPlayInstantPayload(animation.name, animation.fit, animation.scale)
-            for (p in instantTargets) {
-                if (ServerPlayNetworking.canSend(p, AnimationPlayInstantPayload.TYPE)) {
-                    ServerPlayNetworking.send(p, instantPayload)
-                    count++
+        if (streamTargets.isEmpty()) {
+            if (instantTargets.isNotEmpty()) {
+                val instantPayload = AnimationPlayInstantPayload(animation.name, animation.fit, animation.scale)
+                for (p in instantTargets) {
+                    if (ServerPlayNetworking.canSend(p, AnimationPlayInstantPayload.TYPE)) {
+                        ServerPlayNetworking.send(p, instantPayload)
+                        count++
+                    }
                 }
             }
-        }
-
-        if (streamTargets.isNotEmpty()) {
-            count += ScreenAnimationStorage.send(source.server, streamTargets, animation, prewarmOnly = false)
+        } else {
+            val instantPayload = if (instantTargets.isNotEmpty()) {
+                AnimationPlayInstantPayload(animation.name, animation.fit, animation.scale)
+            } else null
+            count += ScreenAnimationStorage.send(
+                source.server,
+                streamTargets,
+                animation,
+                prewarmOnly = false,
+                instantSyncTargets = instantTargets.map { it.uuid }.toSet(),
+                instantSyncPayload = instantPayload
+            )
+            count += instantTargets.size
         }
 
         val instantMsg = if (instantTargets.isNotEmpty()) " (${instantTargets.size} al instante desde cache precalentada)" else ""
@@ -338,7 +349,9 @@ internal data class ServerAnimationSession(
     val prewarmOnly: Boolean = false,
     var nextChunkIndex: Int = 0,
     val readyUuids: MutableSet<UUID> = mutableSetOf(),
-    val expiresAt: Long = System.currentTimeMillis() + 60_000L
+    val expiresAt: Long = System.currentTimeMillis() + 60_000L,
+    val instantSyncTargets: Set<UUID> = emptySet(),
+    val instantSyncPayload: AnimationPlayInstantPayload? = null
 )
 
 data class AnimationDefinition(
@@ -811,7 +824,14 @@ internal object ScreenAnimationStorage {
         return PreparedAnimation(name, settings.fps, scale, fit, soundsJson, frames.size, archive)
     }
 
-    fun send(server: MinecraftServer, targets: List<ServerPlayer>, animation: PreparedAnimation, prewarmOnly: Boolean = false): Int {
+    fun send(
+        server: MinecraftServer,
+        targets: List<ServerPlayer>,
+        animation: PreparedAnimation,
+        prewarmOnly: Boolean = false,
+        instantSyncTargets: Set<UUID> = emptySet(),
+        instantSyncPayload: AnimationPlayInstantPayload? = null
+    ): Int {
         val eligibleTargets = targets.distinctBy { it.uuid }.filter { player ->
             ServerPlayNetworking.canSend(player, AnimationTransferStartPayload.TYPE) &&
             ServerPlayNetworking.canSend(player, AnimationTransferChunkPayload.TYPE)
@@ -829,7 +849,9 @@ internal object ScreenAnimationStorage {
             archive = animation.archive,
             chunkSize = chunkSize,
             chunkCount = chunkCount,
-            prewarmOnly = prewarmOnly
+            prewarmOnly = prewarmOnly,
+            instantSyncTargets = instantSyncTargets,
+            instantSyncPayload = instantSyncPayload
         )
         activeSessions[transferId] = session
 
@@ -929,6 +951,15 @@ internal object ScreenAnimationStorage {
             val player = server.playerList.getPlayer(uuid) ?: continue
             if (ServerPlayNetworking.canSend(player, AnimationPlayTriggerPayload.TYPE)) {
                 ServerPlayNetworking.send(player, payload)
+            }
+        }
+        val instantPayload = session.instantSyncPayload
+        if (instantPayload != null) {
+            for (uuid in session.instantSyncTargets) {
+                val player = server.playerList.getPlayer(uuid) ?: continue
+                if (ServerPlayNetworking.canSend(player, AnimationPlayInstantPayload.TYPE)) {
+                    ServerPlayNetworking.send(player, instantPayload)
+                }
             }
         }
     }

@@ -14,7 +14,7 @@ data class LegendaryCaptureRecord(
     val capturedByPlayerUuid: UUID,
     val capturedAt: Instant,
     val nextCaptureAt: Instant,
-    val lastDiscordSent: Boolean = false,
+    var lastDiscordSent: Boolean = false,
     val shiny: Boolean = false
 )
 

@@ -15,6 +15,7 @@
     --accent: #38bdf8;
     --green: #34d399;
     --amber: #fbbf24;
+    --red: #f87171;
   }
   * { box-sizing: border-box; }
   body {
@@ -23,19 +24,22 @@
     background: var(--bg);
     color: var(--text);
   }
-  header {
+  .sticky-top {
     position: sticky;
     top: 0;
-    z-index: 20;
-    background: rgba(18, 24, 38, 0.96);
+    z-index: 30;
+    background: rgba(11, 15, 25, 0.96);
     backdrop-filter: blur(8px);
     border-bottom: 1px solid var(--border);
-    padding: 12px 20px;
+  }
+  header {
+    padding: 10px 20px;
     display: flex;
     flex-wrap: wrap;
     gap: 10px;
     align-items: center;
     justify-content: space-between;
+    border-bottom: 1px solid rgba(38, 50, 75, 0.6);
   }
   .brand { display: flex; flex-direction: column; gap: 2px; }
   .brand h1 { margin: 0; font-size: 16px; color: #f8fafc; }
@@ -46,8 +50,8 @@
     color: var(--text);
     border: 1px solid var(--border);
     border-radius: 6px;
-    padding: 7px 12px;
-    font-size: 13px;
+    padding: 6px 11px;
+    font-size: 12.5px;
     cursor: pointer;
     transition: 0.15s ease;
   }
@@ -56,49 +60,59 @@
   button.primary:hover { background: #0369a1; }
   button.success { background: #065f46; border-color: #34d399; color: #ecfdf5; font-weight: 600; }
   button.success:hover { background: #047857; }
-  input[type="text"], input[type="search"] {
+  input[type="text"], input[type="search"], select {
     background: #0d1320;
     color: var(--text);
     border: 1px solid var(--border);
     border-radius: 6px;
-    padding: 7px 10px;
-    font-size: 13px;
+    padding: 6px 10px;
+    font-size: 12.5px;
     outline: none;
   }
   input[type="search"]:focus, input[type="text"]:focus, textarea:focus { border-color: var(--accent); }
 
   .prism-builder {
     max-width: 1280px;
-    margin: 14px auto 0;
-    padding: 12px 16px;
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 10px;
+    margin: 0 auto;
+    padding: 9px 20px;
     display: flex;
     flex-wrap: wrap;
-    gap: 12px;
+    gap: 10px;
     align-items: center;
   }
-  .prism-builder label { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  .prism-builder label { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 5px; }
   input[type="color"] {
-    width: 30px; height: 26px; padding: 0; border: 1px solid var(--border);
+    width: 28px; height: 24px; padding: 0; border: 1px solid var(--border);
     border-radius: 4px; background: transparent; cursor: pointer;
+  }
+  .preset-bar {
+    display: flex;
+    gap: 5px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .preset-chip {
+    padding: 3px 8px;
+    font-size: 11px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: #172033;
   }
   .drop-zone {
     max-width: 1280px;
     margin: 12px auto 0;
-    padding: 14px;
+    padding: 12px;
     border: 1.5px dashed var(--border);
     border-radius: 10px;
     text-align: center;
     color: var(--muted);
-    font-size: 13px;
+    font-size: 12.5px;
   }
   .drop-zone.dragover { border-color: var(--accent); background: rgba(56, 189, 248, 0.08); color: #fff; }
 
   main {
     max-width: 1280px;
-    margin: 14px auto 60px;
+    margin: 12px auto 60px;
     padding: 0 14px;
     display: grid;
     gap: 12px;
@@ -111,6 +125,7 @@
     display: grid;
     gap: 8px;
   }
+  .entry.active-card { border-color: var(--accent); box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.25); }
   .entry-head {
     display: flex;
     justify-content: space-between;
@@ -130,11 +145,25 @@
     background: #1e293b;
     border: 1px solid #334155;
     border-radius: 5px;
-    padding: 3px 8px;
+    padding: 2px 8px;
     display: inline-block;
   }
-  .entry-actions { display: flex; gap: 6px; flex-wrap: wrap; }
-  .entry-actions button { padding: 4px 8px; font-size: 12px; }
+  .warn-pill {
+    font-size: 11px;
+    color: #fde68a;
+    background: rgba(245, 158, 11, 0.16);
+    border: 1px solid rgba(245, 158, 11, 0.45);
+    border-radius: 5px;
+    padding: 2px 7px;
+  }
+  .entry-actions { display: flex; gap: 5px; flex-wrap: wrap; align-items: center; }
+  .entry-actions button { padding: 4px 8px; font-size: 11.5px; }
+  .ph-btn {
+    background: rgba(56, 189, 248, 0.12);
+    border-color: rgba(56, 189, 248, 0.35);
+    color: #7dd3fc;
+    font-family: Consolas, monospace;
+  }
   .preview {
     background: #080b12;
     border: 1px solid #1e293b;
@@ -153,7 +182,7 @@
   }
   textarea {
     width: 100%;
-    min-height: 52px;
+    min-height: 48px;
     resize: vertical;
     background: #0d1320;
     color: #e2e8f0;
@@ -185,44 +214,54 @@
     0% { background-position: 0% 50%; }
     100% { background-position: 250% 50%; }
   }
-  .status { font-size: 12px; color: var(--green); }
+  .status { font-size: 12px; color: var(--green); font-weight: 600; }
 </style>
 </head>
 <body>
 
-<header>
-  <div class="brand">
-    <h1>Desgraciamon 3 · Editor Visual de texts.json</h1>
-    <span id="fileInfo">Ningún archivo cargado (arrastra un texts.json o pulsa Abrir)</span>
-  </div>
-  <div class="toolbar">
-    <input type="search" id="search" placeholder="Buscar clave o texto..." style="width:220px" />
-    <button class="primary" id="btnOpen">Abrir texts.json</button>
-    <input type="file" id="fileInput" accept=".json,application/json" hidden />
-    <button class="success" id="btnSaveDirect" title="Sobrescribe el archivo abierto (Chrome/Edge)">Guardar directo</button>
-    <button id="btnDownload">Descargar JSON</button>
-    <button id="btnCopy">Copiar JSON</button>
-  </div>
-</header>
+<div class="sticky-top">
+  <header>
+    <div class="brand">
+      <h1>Desgraciamon 3 · Editor Visual de texts.json</h1>
+      <span id="fileInfo">Ningún archivo cargado (arrastra un texts.json o pulsa Abrir)</span>
+    </div>
+    <div class="toolbar">
+      <input type="search" id="search" placeholder="Buscar clave o texto..." style="width:220px" />
+      <button class="primary" id="btnOpen">Abrir texts.json</button>
+      <input type="file" id="fileInput" accept=".json,application/json" hidden />
+      <button class="success" id="btnSaveDirect" title="Sobrescribe el archivo abierto (Chrome/Edge)">Guardar directo</button>
+      <button id="btnDownload">Descargar JSON</button>
+      <button id="btnCopy">Copiar JSON</button>
+    </div>
+  </header>
 
-<section class="prism-builder">
-  <strong style="font-size:13px;color:#f8fafc;">Generador rápido (selecciona texto en un campo y pulsa Aplicar):</strong>
-  <label>Color: <input type="color" id="singleColor" value="#38bdf8" /></label>
-  <button id="btnApplyColor">Aplicar &lt;color&gt;</button>
-  <span style="color:var(--border)">|</span>
-  <label>Prism 1: <input type="color" id="p1" value="#ff3cac" /></label>
-  <label>2: <input type="color" id="p2" value="#784ba0" /></label>
-  <label>3: <input type="color" id="p3" value="#00f2fe" /></label>
-  <label><input type="checkbox" id="useP3" checked /> 3er color</label>
-  <label>Vel: <input type="number" id="pSpeed" value="1.0" step="0.2" min="-10" max="10" style="width:62px;background:#0d1320;color:#fff;border:1px solid var(--border);border-radius:4px;padding:3px 6px;" /></label>
-  <button id="btnApplyPrism">Aplicar &lt;prism&gt;</button>
-  <button id="btnBold"><b>B</b></button>
-  <button id="btnItalic"><i>I</i></button>
-  <span class="status" id="statusMsg"></span>
-</section>
+  <section class="prism-builder" id="toolbar">
+    <label>Color: <input type="color" id="singleColor" value="#38bdf8" /></label>
+    <button data-keepfocus id="btnApplyColor" title="Si no seleccionas texto, reemplaza el color de toda la línea">Aplicar &lt;color&gt;</button>
+    <span style="color:var(--border)">|</span>
+    <label>Prism 1: <input type="color" id="p1" value="#38bdf8" /></label>
+    <label>2: <input type="color" id="p2" value="#60a5fa" /></label>
+    <label>3: <input type="color" id="p3" value="#818cf8" /></label>
+    <label><input type="checkbox" id="useP3" checked /> 3er</label>
+    <label>Vel: <input type="number" id="pSpeed" value="1.0" step="0.2" min="-10" max="10" style="width:56px;background:#0d1320;color:#fff;border:1px solid var(--border);border-radius:4px;padding:3px 5px;" /></label>
+    <button data-keepfocus id="btnApplyPrism" title="Si no seleccionas texto, aplica Prism a toda la línea">Aplicar &lt;prism&gt;</button>
+    <button data-keepfocus id="btnBold" title="Negrita"><b>B</b></button>
+    <button data-keepfocus id="btnItalic" title="Cursiva"><i>I</i></button>
+    <button data-keepfocus id="btnCleanActive" title="Quita colores/prism/negrita sin tocar {placeholders}">Limpiar formato</button>
+    <div class="preset-bar">
+      <span style="font-size:11.5px;color:var(--muted);">Presets:</span>
+      <button data-keepfocus class="preset-chip" data-preset="#38BDF8,#60A5FA,#818CF8">Azul Cielo</button>
+      <button data-keepfocus class="preset-chip" data-preset="#F97316,#EF4444,#FACC15">Fuego</button>
+      <button data-keepfocus class="preset-chip" data-preset="#10B981,#34D399,#2DD4BF">Esmeralda</button>
+      <button data-keepfocus class="preset-chip" data-preset="#FDE047,#F59E0B,#FEF08A">Dorado</button>
+      <button data-keepfocus class="preset-chip" data-preset="#FF3CAC,#784BA0,#00F2FE">Galaxia</button>
+    </div>
+    <span class="status" id="statusMsg"></span>
+  </section>
+</div>
 
 <div class="drop-zone" id="dropZone">
-  Arrastra aquí cualquier archivo <code>config/&lt;mod&gt;/.texts/texts.json</code> para visualizarlo con sus degradados Prism y editarlo.
+  Arrastra aquí cualquier <code>config/&lt;mod&gt;/.texts/texts.json</code>. Consejo: selecciona una parte del texto (o haz clic sin seleccionar para aplicarlo a toda la línea).
 </div>
 
 <main id="list"></main>
@@ -237,6 +276,7 @@ let fileHandle = null;
 let originalData = {};
 let data = {};
 let activeTextarea = null;
+const undoStacks = new Map();
 
 const elList = document.getElementById('list');
 const elSearch = document.getElementById('search');
@@ -255,6 +295,39 @@ function escapeHtml(s) {
 function expandHex(hex) {
   const h = hex.replace('#','');
   return '#' + (h.length === 3 ? h[0]+h[0]+h[1]+h[1]+h[2]+h[2] : h);
+}
+
+function stripFormatTags(str) {
+  return str
+    .replace(/<\/?(?:color|bold|italic|prism)(?:=[^<>]*)?>/gi, '')
+    .replace(/§[0-9a-flmnor]/gi, '');
+}
+
+function extractPlaceholders(str) {
+  return [...new Set((str.match(/\{[A-Za-z][A-Za-z0-9_]*\}/g) || []))];
+}
+
+function validateTemplate(key, val) {
+  const warnings = [];
+  const origPh = extractPlaceholders(String(originalData[key] ?? ''));
+  const curPh = extractPlaceholders(val);
+  const missing = origPh.filter(p => !curPh.includes(p));
+  if (missing.length) warnings.push(`Falta: ${missing.join(', ')}`);
+
+  const tagRe = /<(\/?)(color|bold|italic|prism)(?:=[^<>]*)?>/gi;
+  const stack = [];
+  for (const m of val.matchAll(tagRe)) {
+    const isClose = m[1] === '/';
+    const name = m[2].toLowerCase();
+    if (!isClose) stack.push(name);
+    else {
+      const idx = stack.lastIndexOf(name);
+      if (idx < 0) warnings.push(`Cierre sobrante </${name}>`);
+      else stack.splice(idx);
+    }
+  }
+  if (stack.length) warnings.push(`Sin cerrar: <${stack.join('>, <')}>`);
+  return warnings;
 }
 
 function renderRichPreview(template) {
@@ -333,109 +406,40 @@ function renderRichPreview(template) {
 }
 
 const CONTEXTS = {
-  // Badges
   'badge.unlocked.personal': 'Chat personal · Cuando el jugador desbloquea una insignia',
-  'badge.unlocked.broadcast': 'Chat global · Aviso de desbloqueo (si se usa broadcast)',
-  'badge.granted.admin': 'Chat al admin · Al otorgar una insignia con /badges give',
-  'badge.revoked.admin': 'Chat al admin · Al quitar una insignia con /badges remove',
-  'badge.already_owned': 'Chat al admin · Cuando el jugador ya tenía esa insignia',
-  'badge.unknown': 'Chat · Cuando se ingresa un ID de insignia inexistente',
-  'badge.list.header': 'Chat · Cabecera de /badges list',
-  'badge.list.entry': 'Chat · Cada fila de /badges list',
-  'badge.player.header': 'Chat · Cabecera de /badges player <jugador>',
-  'badge.player.empty': 'Chat · Cuando el jugador consultado no tiene insignias',
-  'badge.hover.format': 'Tooltip / Hover · Al pasar el mouse sobre una insignia en el chat',
-  'gui.title': 'GUI · Título de la pantalla de Insignias / Bestiario',
-  'gui.subtitle': 'GUI · Subtítulo de la pantalla de Insignias',
-  'gui.empty': 'GUI · Mensaje cuando aún no hay insignias desbloqueadas',
-  'gui.state.visible': 'GUI · Etiqueta de estado visible de una insignia',
-  'gui.state.hidden': 'GUI · Etiqueta de estado oculta de una insignia',
-  'gui.button.back': 'GUI · Botón para volver atrás',
-  'gui.f7.button': 'GUI Ajustes · Resumen de insignias visibles en el botón superior',
-
-  // Announcements / Misiones
+  'badge.unlocked.broadcast': 'Chat global · Aviso de desbloqueo',
   'daily.unlocked': 'Chat personal · Cuando se desbloquea una nueva ranura de misión diaria',
-
-  // Vortex / Visuals
-  'vortex.bossbar.title': 'BossBar superior · Título de la barra mientras hay un Vórtice activo',
-  'vortex.nofly.ride': 'ActionBar · Al intentar volar en montura durante un Vórtice No-Fly',
-  'vortex.nofly.dismount': 'ActionBar · Al desmontar automáticamente por gravedad del Vórtice',
-  'vortex.anomaly.steal_blocked': 'Chat personal · Al lanzar Pokéball a una Anomalía que otro jugador está peleando',
-  'vortex.limbo.empty': 'Chat personal · Al usar comando de recompensa sin anomalías pendientes en Limbo',
-  'vortex.limbo.claimed': 'Chat personal · Al reclamar al Pokémon del Vórtice hacia tu PC',
-  'vortex.limbo.sold': 'Chat personal · Al vender la anomalía del Vórtice al Mercado Negro',
-
-  // Training & Item Restrictions
-  'training.victory': 'Chat personal · Al ganar un combate contra entrenador de entrenamiento',
-  'training.defeat': 'Chat personal · Al perder un combate de entrenamiento',
-  'training.fled': 'Chat personal · Al huir de un combate de entrenamiento',
-  'item.disabled': 'ActionBar · Al intentar usar un ítem bloqueado por progresión',
-
-  // Biome Locator
-  'command.usage': 'Chat · Al ejecutar /radar sin argumentos',
-  'command.spawns.empty': 'Chat · /radar apariciones cuando no hay spawns registrados',
-  'command.spawns.header': 'Chat · Cabecera de /radar apariciones <bioma>',
-  'command.biomes.empty': 'Chat · /radar buscar cuando no se encuentran biomas',
-  'command.biomes.header': 'Chat · Cabecera de /radar buscar <pokemon>',
-  'atlas.stopped': 'Chat personal · Al detener el rastreo del Atlas de Biomas',
-  'atlas.cooldown': 'Chat personal · Al buscar demasiado rápido en el Atlas de Biomas',
-  'atlas.invalid_biome': 'Chat personal · Cuando el ID de bioma seleccionado es inválido',
-
-  // Legendary Cooldown
-  'bossbar.title': 'BossBar superior · Tiempo restante de cooldown legendario',
-  'bossbar.enabled': 'Chat personal · Al activar la BossBar de cooldown',
-  'bossbar.disabled': 'Chat personal · Al desactivar la BossBar de cooldown',
-  'notice.enabled': 'Chat personal · Al activar el aviso de cooldown al entrar',
-  'notice.disabled': 'Chat personal · Al desactivar el aviso de cooldown al entrar',
-  'cooldown.blocked': 'Chat personal · Al intentar capturar un legendario teniendo cooldown activo',
-  'cooldown.join_wait': 'Chat al entrar · Aviso de cooldown restante al conectarse al servidor',
-  'cooldown.ready': 'Chat al entrar / consulta · Cuando ya puedes capturar otro legendario',
-  'cooldown.remaining': 'Chat · Al consultar tu cooldown restante',
-  'cooldown.cleared': 'Chat personal · Cuando se elimina tu cooldown',
-  'cooldown.set': 'Chat personal · Cuando se establece un cooldown',
-  'cooldown.none_to_reduce': 'Chat personal · Al intentar reducir cooldown sin tener uno activo',
-  'cooldown.cleared.admin': 'Chat al admin · Al limpiar el cooldown de un jugador',
-  'cooldown.set.admin': 'Chat al admin · Al fijar el cooldown de un jugador',
-  'cooldown.reduced.admin': 'Chat al admin · Al restar tiempo al cooldown de un jugador',
-
-  // Discord Bridge
-  'link.message': 'Chat personal · Al usar /discord vincular para generar código',
-  'link.hover': 'Tooltip / Hover · Al pasar el mouse sobre el código de vinculación',
-  'unlink.success': 'Chat personal · Al desvincular tu cuenta de Discord',
-  'unlink.missing': 'Chat personal · Al intentar desvincular sin tener cuenta vinculada',
-  'privacy.enabled': 'Chat personal · Al activar privacidad de equipo con /discord equipo',
-  'privacy.disabled': 'Chat personal · Al desactivar privacidad de equipo con /discord equipo',
-  'settings.title': 'GUI · Título de la ventana de Ajustes de Desgraciamon 3',
-
-  // Mirror World
-  'protect.blocked': 'ActionBar / Chat · Al intentar romper o colocar bloques en el Mundo Espejo',
-  'enter.generating': 'Chat personal · Mientras se genera tu parcela del Mundo Espejo',
-  'enter.welcome': 'Chat personal · Al entrar por primera vez o visitar tus recuerdos',
-  'enter.visit': 'Chat personal · Al entrar a ver los recuerdos de otro jugador',
-  'enter.no_memories': 'Chat personal · Si el jugador no tiene recuerdos guardados',
-  'enter.owner_notice': 'Chat al dueño · Cuando un invitado entra a ver tus recuerdos',
-  'enter.hint': 'Chat personal · Consejo inferior al entrar al Mundo Espejo',
-  'exit.done': 'Chat personal · Al salir del Mundo Espejo con /espejo salir',
-  'exit.not_inside': 'Chat personal · Al usar /espejo salir estando fuera del Mundo Espejo'
+  'vortex.bossbar.title': 'BossBar superior · Título del Vórtice activo',
+  'link.message': 'Chat personal · Código al usar /discord vincular',
+  'protect.blocked': 'ActionBar / Chat · Al intentar romper/colocar bloques en Mundo Espejo'
 };
 
 function getContextForKey(key) {
   if (CONTEXTS[key]) return CONTEXTS[key];
-  if (key.startsWith('badge.') && key.endsWith('.icon')) return 'Chat / Tab / GUI · Icono de la insignia';
-  if (key.startsWith('badge.') && key.endsWith('.name')) return 'Chat / Hover / GUI · Nombre de la insignia';
-  if (key.startsWith('badge.') && key.endsWith('.description')) return 'Hover / GUI · Descripción de la insignia';
-  if (key.startsWith('discord.')) return 'Discord Bot · Respuesta o texto de comando slash en Discord';
-  if (key.startsWith('team.color.')) return 'Discord Embed · Color hex del embed según si es Shiny o Normal';
-  if (key.startsWith('team.')) return 'Discord Embed · Campo del embed de /equipo en Discord';
-  if (key.startsWith('invite.') || key.startsWith('kick.')) return 'Chat · Invitación o expulsión dentro del Mundo Espejo';
-  if (key.startsWith('memory.')) return 'Chat · Etiqueta de recuerdo (Shiny / Legendario) en Mundo Espejo';
-  if (key.startsWith('admin.')) return 'Chat al admin · Respuesta de comando administrativo';
-  if (key.startsWith('challenge.')) return 'Chat · Desafíos de combate en Showdown Arena';
-  if (key.startsWith('arena.') || key.startsWith('tournament.') || key.startsWith('lights.') || key.startsWith('zone.')) return 'Chat / ActionBar · Mensajes de Showdown Arena';
-  if (key.startsWith('market.') || key.startsWith('economy.') || key.startsWith('bank.')) return 'Chat · Avisos o comandos de Economía y Mercado';
-  if (key.startsWith('announcement.') || key.startsWith('mission.') || key.startsWith('daily.')) return 'Chat / GUI · Anuncios y Misiones diarias';
-  if (key.startsWith('catch.') || key.startsWith('legendary.')) return 'Chat / GUI · Avisos de captura y Bestiario Legendario';
+  if (key.startsWith('badge.')) return 'Insignias · ' + key;
+  if (key.startsWith('discord.')) return 'Discord Bot · Respuesta de comando slash';
+  if (key.startsWith('team.')) return 'Discord Embed · /equipo';
+  if (key.startsWith('invite.') || key.startsWith('kick.')) return 'Mundo Espejo · Invitación / expulsión';
+  if (key.startsWith('enter.') || key.startsWith('exit.')) return 'Mundo Espejo · Entrada / salida';
+  if (key.startsWith('challenge.') || key.startsWith('arena.') || key.startsWith('tournament.')) return 'Showdown Arena';
+  if (key.startsWith('market.') || key.startsWith('economy.') || key.startsWith('bank.')) return 'Economía y Mercado';
+  if (key.startsWith('announcement.') || key.startsWith('mission.') || key.startsWith('daily.')) return 'Anuncios y Misiones';
+  if (key.startsWith('catch.') || key.startsWith('legendary.')) return 'Bestiario / Capturas';
   return 'Texto configurable del mod';
+}
+
+function pushUndo(key, prevVal) {
+  if (!undoStacks.has(key)) undoStacks.set(key, []);
+  const st = undoStacks.get(key);
+  if (st[st.length - 1] !== prevVal) st.push(prevVal);
+  if (st.length > 30) st.shift();
+}
+
+function updateCardUI(entryObj) {
+  const { ta, key, prev, warnEl } = entryObj;
+  prev.innerHTML = renderRichPreview(ta.value);
+  const warns = validateTemplate(key, ta.value);
+  warnEl.innerHTML = warns.map(w => `<span class="warn-pill">⚠ ${escapeHtml(w)}</span>`).join(' ');
 }
 
 function renderList() {
@@ -448,54 +452,119 @@ function renderList() {
 
     const head = document.createElement('div');
     head.className = 'entry-head';
-    head.innerHTML = `<div><span class="entry-key">${escapeHtml(key)}</span> <span class="entry-context">${escapeHtml(getContextForKey(key))}</span></div>`;
+    const titleWrap = document.createElement('div');
+    titleWrap.innerHTML = `<span class="entry-key">${escapeHtml(key)}</span> <span class="entry-context">${escapeHtml(getContextForKey(key))}</span>`;
+    const warnEl = document.createElement('span');
+    titleWrap.append(' ', warnEl);
 
     const actions = document.createElement('div');
     actions.className = 'entry-actions';
+
+    const origPh = extractPlaceholders(String(originalData[key] ?? ''));
+    for (const ph of origPh) {
+      const phBtn = document.createElement('button');
+      phBtn.className = 'ph-btn';
+      phBtn.textContent = `+ ${ph}`;
+      phBtn.title = `Insertar ${ph} en el cursor`;
+      phBtn.onmousedown = (e) => e.preventDefault();
+      phBtn.onclick = () => {
+        pushUndo(key, ta.value);
+        const s = ta.selectionStart ?? ta.value.length;
+        const e = ta.selectionEnd ?? ta.value.length;
+        ta.value = ta.value.slice(0, s) + ph + ta.value.slice(e);
+        data[key] = ta.value;
+        ta.focus();
+        ta.setSelectionRange(s + ph.length, s + ph.length);
+        updateCardUI(entryObj);
+      };
+      actions.appendChild(phBtn);
+    }
+
+    const btnUndo = document.createElement('button');
+    btnUndo.textContent = 'Deshacer';
+    btnUndo.onclick = () => {
+      const st = undoStacks.get(key);
+      if (!st || !st.length) { setStatus('Nada que deshacer'); return; }
+      ta.value = st.pop();
+      data[key] = ta.value;
+      updateCardUI(entryObj);
+    };
+
     const btnReset = document.createElement('button');
     btnReset.textContent = 'Restaurar';
     btnReset.onclick = () => {
+      pushUndo(key, ta.value);
       data[key] = originalData[key];
       ta.value = data[key];
-      prev.innerHTML = renderRichPreview(data[key]);
+      updateCardUI(entryObj);
       setStatus(`Restaurado: ${key}`);
     };
-    actions.appendChild(btnReset);
-    head.appendChild(actions);
+    actions.append(btnUndo, btnReset);
+    head.append(titleWrap, actions);
 
     const prev = document.createElement('div');
     prev.className = 'preview';
-    prev.innerHTML = renderRichPreview(String(data[key] ?? ''));
 
     const ta = document.createElement('textarea');
     ta.value = String(data[key] ?? '');
-    ta.addEventListener('focus', () => { activeTextarea = { ta, key, prev }; });
+    const entryObj = { ta, key, prev, warnEl, card };
+
+    ta.addEventListener('focus', () => {
+      document.querySelectorAll('.entry.active-card').forEach(c => c.classList.remove('active-card'));
+      card.classList.add('active-card');
+      activeTextarea = entryObj;
+    });
     ta.addEventListener('input', () => {
+      pushUndo(key, data[key]);
       data[key] = ta.value;
-      prev.innerHTML = renderRichPreview(ta.value);
+      updateCardUI(entryObj);
     });
 
+    updateCardUI(entryObj);
     card.append(head, prev, ta);
     elList.appendChild(card);
   }
 }
 
-function wrapSelection(openTag, closeTag) {
+document.querySelectorAll('[data-keepfocus]').forEach(btn => {
+  btn.addEventListener('mousedown', (e) => e.preventDefault());
+});
+
+function applyFormat(openTag, closeTag, replaceOuterColorOrPrism = false) {
   if (!activeTextarea) { setStatus('Haz clic o selecciona texto en un campo primero'); return; }
-  const { ta, key, prev } = activeTextarea;
-  const start = ta.selectionStart;
-  const end = ta.selectionEnd;
+  const { ta, key } = activeTextarea;
+  pushUndo(key, ta.value);
+
+  let start = ta.selectionStart ?? 0;
+  let end = ta.selectionEnd ?? 0;
   const val = ta.value;
-  const selected = val.slice(start, end) || 'Texto';
-  ta.value = val.slice(0, start) + openTag + selected + closeTag + val.slice(end);
+
+  if (start === end) {
+    // Sin selección: aplicar a toda la línea limpiando color/prism previo para no apilar etiquetas
+    const base = replaceOuterColorOrPrism ? stripFormatTags(val) : val;
+    ta.value = openTag + base + closeTag;
+    data[key] = ta.value;
+    updateCardUI(activeTextarea);
+    ta.focus();
+    ta.setSelectionRange(openTag.length, openTag.length + base.length);
+    return;
+  }
+
+  let selected = val.slice(start, end);
+  if (replaceOuterColorOrPrism) {
+    selected = selected.replace(/^<(?:color|prism)=[^<>]*>|<\/(?:color|prism)>$/gi, '');
+  }
+  const inserted = openTag + selected + closeTag;
+  ta.value = val.slice(0, start) + inserted + val.slice(end);
   data[key] = ta.value;
-  prev.innerHTML = renderRichPreview(ta.value);
+  updateCardUI(activeTextarea);
   ta.focus();
+  ta.setSelectionRange(start + openTag.length, start + openTag.length + selected.length);
 }
 
 document.getElementById('btnApplyColor').onclick = () => {
   const c = document.getElementById('singleColor').value.toUpperCase();
-  wrapSelection(`<color=${c}>`, '</color>');
+  applyFormat(`<color=${c}>`, '</color>', true);
 };
 document.getElementById('btnApplyPrism').onclick = () => {
   const c1 = document.getElementById('p1').value.toUpperCase();
@@ -503,10 +572,36 @@ document.getElementById('btnApplyPrism').onclick = () => {
   const c3 = document.getElementById('useP3').checked ? ',' + document.getElementById('p3').value.toUpperCase() : '';
   const spd = parseFloat(document.getElementById('pSpeed').value || '1.0');
   const spdAttr = spd !== 1.0 ? ` speed=${spd}` : '';
-  wrapSelection(`<prism=${c1},${c2}${c3}${spdAttr}>`, '</prism>');
+  applyFormat(`<prism=${c1},${c2}${c3}${spdAttr}>`, '</prism>', true);
 };
-document.getElementById('btnBold').onclick = () => wrapSelection('<bold>', '</bold>');
-document.getElementById('btnItalic').onclick = () => wrapSelection('<italic>', '</italic>');
+document.getElementById('btnBold').onclick = () => applyFormat('<bold>', '</bold>', false);
+document.getElementById('btnItalic').onclick = () => applyFormat('<italic>', '</italic>', false);
+document.getElementById('btnCleanActive').onclick = () => {
+  if (!activeTextarea) { setStatus('Selecciona un campo primero'); return; }
+  const { ta, key } = activeTextarea;
+  pushUndo(key, ta.value);
+  ta.value = stripFormatTags(ta.value);
+  data[key] = ta.value;
+  updateCardUI(activeTextarea);
+  ta.focus();
+  setStatus('Formato limpiado');
+};
+
+document.querySelectorAll('[data-preset]').forEach(btn => {
+  btn.onclick = () => {
+    const cols = btn.dataset.preset.split(',');
+    document.getElementById('p1').value = cols[0];
+    document.getElementById('p2').value = cols[1];
+    if (cols[2]) {
+      document.getElementById('useP3').checked = true;
+      document.getElementById('p3').value = cols[2];
+    } else {
+      document.getElementById('useP3').checked = false;
+    }
+    setStatus(`Preset cargado: ${btn.textContent}`);
+  };
+});
+
 elSearch.oninput = renderList;
 
 function loadJsonText(text, name) {
@@ -514,6 +609,7 @@ function loadJsonText(text, name) {
     const parsed = JSON.parse(text);
     originalData = { ...parsed };
     data = { ...parsed };
+    undoStacks.clear();
     elFileInfo.textContent = `Archivo: ${name} (${Object.keys(data).length} claves)`;
     renderList();
     setStatus('Archivo cargado');
@@ -576,10 +672,9 @@ dz.ondrop = async (e) => {
   if (f) { fileHandle = null; loadJsonText(await f.text(), f.name); }
 };
 
-// Demo inicial para ver el renderizado de inmediato
 loadJsonText(JSON.stringify({
-  "ejemplo.prism": "<prism=#FFD700,#FF3CAC,#00F2FE speed=1.2><bold>Desgraciamon 3</bold></prism> <color=#93C5FD>Bienvenido {player}</color>",
-  "ejemplo.bossbar": "<prism=#A855F7,#EC4899><bold>Vórtice Dimensional</bold></prism>"
+  "ejemplo.prism": "<prism=#38BDF8,#60A5FA,#818CF8 speed=1.2><bold>Desgraciamon 3</bold></prism> <color=#93C5FD>Bienvenido {player}</color>",
+  "daily.unlocked": "<color=#38BDF8>¡Nueva misión diaria disponible! Pulsa [{key}] para verla.</color>"
 }, null, 2), 'Ejemplo (abre tu texts.json)');
 </script>
 </body>

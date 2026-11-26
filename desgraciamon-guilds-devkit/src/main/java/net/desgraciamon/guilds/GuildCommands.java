@@ -235,12 +235,12 @@ final class GuildCommands {
 
    private static int createFromRaw(CommandSourceStack source, String raw) throws CommandSyntaxException {
       if (raw == null) {
-         return fail(source, "Uso: /guild create <nombre> <#RRGGBB>");
+         return fail(source, "Uso: /gremio crear <nombre> <#RRGGBB>");
       } else {
          String trimmed = raw.trim();
          int lastSpace = trimmed.lastIndexOf(32);
          if (lastSpace <= 0) {
-            return fail(source, "Uso: /guild create <nombre> <#RRGGBB>");
+            return fail(source, "Uso: /gremio crear <nombre> <#RRGGBB>");
          } else {
             String rawName = trimmed.substring(0, lastSpace).trim();
             String rawColor = trimmed.substring(lastSpace + 1).trim();
@@ -299,10 +299,10 @@ final class GuildCommands {
             activity(guild, "INVITED", player, target.getGameProfile().getName());
             store().save();
             target.sendSystemMessage(
-               Component.literal(
-                  "§a§l[GREMIO] §fHas recibido una invitación para unirte a §b"
-                     + guild.name
-                     + "§f. Abre el menú del gremio para verla o usa §e/guild accept§f."
+               GuildTextCatalog.component(
+                  "guild.invite.received",
+                  "guild", guild.name,
+                  "key", Component.keybind("key.desgraciamon_guilds.open").withStyle(net.minecraft.ChatFormatting.AQUA, net.minecraft.ChatFormatting.BOLD)
                )
             );
             GuildNetwork.sync(target, source.getServer(), store());
@@ -440,7 +440,7 @@ final class GuildCommands {
             getStorage().save();
             GuildNetwork.syncAll(source.getServer());
             if (target != null) {
-               target.sendSystemMessage(Component.literal("Has sido expulsado del gremio " + guild.name + "."));
+               target.sendSystemMessage(GuildTextCatalog.component("guild.kicked", "guild", guild.name));
             }
 
             success(source, targetName + " fue expulsado.");
@@ -730,7 +730,7 @@ final class GuildCommands {
          guild.waypoints.add(waypoint);
          activity(guild, "WAYPOINT_CREATED", player, name + " " + waypoint.dimension + " " + waypoint.x + "," + waypoint.y + "," + waypoint.z);
          getStorage().save();
-         success(source, "Waypoint personal creado: " + name + ". Usa /guild waypoint share " + name + " para compartirlo.");
+         success(source, "Waypoint personal creado: " + name + ". Usa /gremio punto compartir " + name + " para compartirlo.");
          return 1;
       }
    }

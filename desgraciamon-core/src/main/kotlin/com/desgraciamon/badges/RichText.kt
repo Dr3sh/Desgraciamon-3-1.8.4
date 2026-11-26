@@ -78,7 +78,11 @@ internal object RichText {
                     val replacement = replacements[name]
                     if (replacement is Component) {
                         prism?.let { flushPrism(it, result) }
-                        result.append(replacement)
+                        if (style == Style.EMPTY) {
+                            result.append(replacement)
+                        } else {
+                            result.append(Component.empty().withStyle(style).append(replacement))
+                        }
                     } else {
                         emit(replacement?.toString() ?: token)
                     }

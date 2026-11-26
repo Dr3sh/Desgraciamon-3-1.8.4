@@ -114,7 +114,12 @@ internal fun slashCommands() = listOf(
             SubcommandData("canal-skins", "Configura el canal exclusivo para convertir skins automáticamente")
                 .addOptions(OptionData(OptionType.CHANNEL, "canal", "Canal de Discord para skins", true)),
             SubcommandData("rol-hitos", "Configura el rol autorizado para gestionar hitos (vacío = solo admins)")
-                .addOptions(OptionData(OptionType.ROLE, "rol", "Rol de Discord autorizado (opcional)", false))
+                .addOptions(OptionData(OptionType.ROLE, "rol", "Rol de Discord autorizado (opcional)", false)),
+            SubcommandData("desvincular", "Desvincula la cuenta de un jugador (funciona aunque esté desconectado)")
+                .addOptions(
+                    OptionData(OptionType.USER, "usuario", "Usuario de Discord a desvincular", false),
+                    OptionData(OptionType.STRING, "jugador", "Nombre de Minecraft o UUID a desvincular", false)
+                )
         )
 )
 

@@ -7,6 +7,8 @@ import net.minecraft.client.gui.components.Button
 import net.minecraft.client.gui.components.EditBox
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.network.chat.Component
+import org.lwjgl.glfw.GLFW
+import java.awt.Color
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.max
@@ -49,11 +51,17 @@ class ArenaLightsEditorScreen(
 	private var dragMouseX: Double = 0.0
 	private var dragMouseY: Double = 0.0
 
-	// Color EditBoxes (hex RRGGBB)
+	// Color EditBoxes (hex RRGGBB) + Visual Hex Picker Popup (estilo Gremios)
 	private lateinit var dayC1Box: EditBox
 	private lateinit var dayC2Box: EditBox
 	private lateinit var nightC1Box: EditBox
 	private lateinit var nightC2Box: EditBox
+	private var activePickerSlot: Int = -1 // -1=none, 0=dayC1, 1=dayC2, 2=nightC1, 3=nightC2
+	private var pickerDragMode: Int = 0 // 0=none, 1=SV box, 2=Hue bar
+	private var pickerHue: Float = 0.55f
+	private var pickerSat: Float = 0.75f
+	private var pickerBri: Float = 0.85f
+	private var updatingFromPicker: Boolean = false
 
 	// Layout coordinates computed in init()
 	private var panelX = 0
@@ -156,17 +164,85 @@ class ArenaLightsEditorScreen(
 		}.bounds(previewX + halfPrevW + 4, previewY, previewW - halfPrevW - 4, 18).build()
 		addRenderableWidget(previewFollowBtn)
 
-		// Color hex EditBoxes at bottom of preview panel
+		// Color hex EditBoxes at bottom of preview panel (con cuadro clickable para selector visual)
 		val colorTop = previewY + previewH - 64
 		val boxW = (previewW - 14) / 2
-		dayC1Box = makeHexBox(previewX, colorTop + 10, boxW, dayColor1) { dayColor1 = it }
-		dayC2Box = makeHexBox(previewX + boxW + 10, colorTop + 10, boxW, dayColor2) { dayColor2 = it }
-		nightC1Box = makeHexBox(previewX, colorTop + 42, boxW, nightColor1) { nightColor1 = it }
-		nightC2Box = makeHexBox(previewX + boxW + 10, colorTop + 42, boxW, nightColor2) { nightColor2 = it }
+		val editW = (boxW - 21).coerceAtLeast(42)
+		dayC1Box = makeHexBox(previewX, colorTop + 10, editW, dayColor1) { c ->
+			dayColor1 = c
+			if (!updatingFromPicker && activePickerSlot == 0) syncPickerFromRgb(c)
+		}
+		dayC2Box = makeHexBox(previewX + boxW + 10, colorTop + 10, editW, dayColor2) { c ->
+			dayColor2 = c
+			if (!updatingFromPicker && activePickerSlot == 1) syncPickerFromRgb(c)
+		}
+		nightC1Box = makeHexBox(previewX, colorTop + 42, editW, nightColor1) { c ->
+			nightColor1 = c
+			if (!updatingFromPicker && activePickerSlot == 2) syncPickerFromRgb(c)
+		}
+		nightC2Box = makeHexBox(previewX + boxW + 10, colorTop + 42, editW, nightColor2) { c ->
+			nightColor2 = c
+			if (!updatingFromPicker && activePickerSlot == 3) syncPickerFromRgb(c)
+		}
 		addRenderableWidget(dayC1Box)
 		addRenderableWidget(dayC2Box)
 		addRenderableWidget(nightC1Box)
 		addRenderableWidget(nightC2Box)
+	}
+
+	private fun syncPickerFromRgb(rgb: Int) {
+		val hsb = Color.RGBtoHSB((rgb shr 16) and 0xFF, (rgb shr 8) and 0xFF, rgb and 0xFF, null)
+		pickerHue = hsb[0]
+		pickerSat = hsb[1]
+		pickerBri = hsb[2]
+	}
+
+	private fun slotColor(slot: Int): Int = when (slot) {
+		0 -> dayColor1
+		1 -> dayColor2
+		2 -> nightColor1
+		else -> nightColor2
+	}
+
+	private fun slotLabel(slot: Int): String = when (slot) {
+		0 -> "Día C1"
+		1 -> "Día C2"
+		2 -> "Noche C1"
+		else -> "Noche C2"
+	}
+
+	private fun setSlotColor(slot: Int, rgb: Int) {
+		val clean = rgb and 0xFFFFFF
+		val hex = "%06X".format(clean)
+		updatingFromPicker = true
+		try {
+			when (slot) {
+				0 -> { dayColor1 = clean; if (::dayC1Box.isInitialized) dayC1Box.value = hex }
+				1 -> { dayColor2 = clean; if (::dayC2Box.isInitialized) dayC2Box.value = hex }
+				2 -> { nightColor1 = clean; if (::nightC1Box.isInitialized) nightC1Box.value = hex }
+				3 -> { nightColor2 = clean; if (::nightC2Box.isInitialized) nightC2Box.value = hex }
+			}
+		} finally {
+			updatingFromPicker = false
+		}
+	}
+
+	private fun swatchBounds(slot: Int): IntArray {
+		val colorTop = previewY + previewH - 64
+		val boxW = (previewW - 14) / 2
+		val colX = if (slot % 2 == 0) previewX else previewX + boxW + 10
+		val rowY = if (slot < 2) colorTop + 10 else colorTop + 42
+		val sx = colX + boxW - 18
+		return intArrayOf(sx, rowY, 18, 16)
+	}
+
+	private fun pickerBounds(): IntArray {
+		val pw = 196
+		val ph = 148
+		val colorTop = previewY + previewH - 64
+		val px = (previewX - 18).coerceIn(panelX + 8, panelX + panelW - pw - 8)
+		val py = (colorTop - ph - 6).coerceIn(panelY + 24, panelY + panelH - ph - 8)
+		return intArrayOf(px, py, pw, ph)
 	}
 
 	private fun makeHexBox(x: Int, y: Int, w: Int, initial: Int, onUpdate: (Int) -> Unit): EditBox {
@@ -221,18 +297,27 @@ class ArenaLightsEditorScreen(
 		renderCatalog(guiGraphics, mouseX, mouseY)
 		renderPreviewCanvas(guiGraphics)
 
-		// Color labels & swatches
+		// Color labels & clickable visual picker swatches
 		val colorTop = previewY + previewH - 64
 		val boxW = (previewW - 14) / 2
 		guiGraphics.drawString(font, "Día C1", previewX, colorTop, 0xFFD0D6E0.toInt(), false)
-		guiGraphics.fill(previewX + boxW - 10, colorTop, previewX + boxW, colorTop + 8, 0xFF000000.toInt() or dayColor1)
 		guiGraphics.drawString(font, "Día C2", previewX + boxW + 10, colorTop, 0xFFD0D6E0.toInt(), false)
-		guiGraphics.fill(previewX + previewW - 14, colorTop, previewX + previewW - 4, colorTop + 8, 0xFF000000.toInt() or dayColor2)
-
 		guiGraphics.drawString(font, "Noche C1", previewX, colorTop + 32, 0xFFD0D6E0.toInt(), false)
-		guiGraphics.fill(previewX + boxW - 10, colorTop + 32, previewX + boxW, colorTop + 40, 0xFF000000.toInt() or nightColor1)
 		guiGraphics.drawString(font, "Noche C2", previewX + boxW + 10, colorTop + 32, 0xFFD0D6E0.toInt(), false)
-		guiGraphics.fill(previewX + previewW - 14, colorTop + 32, previewX + previewW - 4, colorTop + 40, 0xFF000000.toInt() or nightColor2)
+
+		for (slot in 0 until 4) {
+			val b = swatchBounds(slot)
+			val sx = b[0]; val sy = b[1]; val sw = b[2]; val sh = b[3]
+			val hovered = mouseX in sx..(sx + sw) && mouseY in sy..(sy + sh)
+			val selected = activePickerSlot == slot
+			val borderCol = when {
+				selected -> 0xFF63B3ED.toInt()
+				hovered -> 0xFFFFFFFF.toInt()
+				else -> 0xFF4A5058.toInt()
+			}
+			guiGraphics.fill(sx, sy, sx + sw, sy + sh, 0xFF000000.toInt() or (slotColor(slot) and 0xFFFFFF))
+			guiGraphics.renderOutline(sx, sy, sw, sh, borderCol)
+		}
 	}
 
 	override fun render(guiGraphics: GuiGraphics, mouseX: Int, mouseY: Int, partialTick: Float) {
@@ -246,6 +331,100 @@ class ArenaLightsEditorScreen(
 			guiGraphics.renderOutline(dx, dy, 84, 24, 0xFF63B3ED.toInt())
 			guiGraphics.drawCenteredString(font, shortName(slotId), dx + 42, dy + 8, 0xFFFFFFFF.toInt())
 		}
+
+		if (activePickerSlot in 0..3) {
+			renderColorPickerPopup(guiGraphics, mouseX, mouseY)
+		} else {
+			for (slot in 0..3) {
+				val b = swatchBounds(slot)
+				if (mouseX in b[0]..(b[0] + b[2]) && mouseY in b[1]..(b[1] + b[3])) {
+					guiGraphics.renderTooltip(font, Component.literal("Selector visual de color (${slotLabel(slot)})"), mouseX, mouseY)
+					break
+				}
+			}
+		}
+	}
+
+	private fun renderColorPickerPopup(g: GuiGraphics, mouseX: Int, mouseY: Int) {
+		val pb = pickerBounds()
+		val px = pb[0]; val py = pb[1]; val pw = pb[2]; val ph = pb[3]
+
+		val pose = g.pose()
+		pose.pushPose()
+		pose.translate(0f, 0f, 300f)
+
+		g.fill(px - 2, py - 2, px + pw + 2, py + ph + 2, 0xE80A0D14.toInt())
+		g.fill(px, py, px + pw, py + ph, 0xFA141923.toInt())
+		g.renderOutline(px, py, pw, ph, 0xFF63B3ED.toInt())
+
+		g.drawString(font, "Selector Hex • ${slotLabel(activePickerSlot)}", px + 8, py + 7, 0xFFE2E8F0.toInt(), false)
+		val closeX = px + pw - 20; val closeY = py + 5
+		val closeHover = mouseX in closeX..(closeX + 14) && mouseY in closeY..(closeY + 12)
+		g.fill(closeX, closeY, closeX + 14, closeY + 12, if (closeHover) 0xFF9B2C2C.toInt() else 0xFF2D3748.toInt())
+		g.drawCenteredString(font, "X", closeX + 7, closeY + 2, 0xFFFFFFFF.toInt())
+
+		// 1. Cuadro 2D de Saturación (X) y Brillo (Y) estilo Gremios
+		val svX = px + 8; val svY = py + 22; val svW = pw - 16; val svH = 74
+		val stepX = max(2, svW / 44)
+		val stepY = max(2, svH / 18)
+		for (ix in 0 until svW step stepX) {
+			val s = ix.toFloat() / max(1, svW - 1).toFloat()
+			val w = min(stepX, svW - ix)
+			for (iy in 0 until svH step stepY) {
+				val b = 1.0f - iy.toFloat() / max(1, svH - 1).toFloat()
+				val h = min(stepY, svH - iy)
+				val rgb = Color.HSBtoRGB(pickerHue, s, b) and 0xFFFFFF
+				g.fill(svX + ix, svY + iy, svX + ix + w, svY + iy + h, 0xFF000000.toInt() or rgb)
+			}
+		}
+		g.renderOutline(svX - 1, svY - 1, svW + 2, svH + 2, 0xFF4A5058.toInt())
+		val curX = svX + (pickerSat * (svW - 1)).toInt()
+		val curY = svY + ((1.0f - pickerBri) * (svH - 1)).toInt()
+		g.fill(curX - 2, curY - 2, curX + 3, curY + 3, 0xFFFFFFFF.toInt())
+		g.fill(curX - 1, curY - 1, curX + 2, curY + 2, 0xFF000000.toInt())
+
+		// 2. Barra arcoíris de Hue debajo
+		val hueX = svX; val hueY = svY + svH + 6; val hueW = svW; val hueH = 12
+		for (i in 0 until hueW) {
+			val hue = i.toFloat() / max(1, hueW - 1).toFloat()
+			val rgb = Color.HSBtoRGB(hue, 1.0f, 1.0f) and 0xFFFFFF
+			g.fill(hueX + i, hueY, hueX + i + 1, hueY + hueH, 0xFF000000.toInt() or rgb)
+		}
+		g.renderOutline(hueX - 1, hueY - 1, hueW + 2, hueH + 2, 0xFF4A5058.toInt())
+		val indX = hueX + (pickerHue * (hueW - 1)).toInt()
+		g.fill(indX - 1, hueY - 2, indX + 2, hueY + hueH + 2, 0xFFFFFFFF.toInt())
+		g.fill(indX, hueY - 1, indX + 1, hueY + hueH + 1, 0xFF101010.toInt())
+
+		// 3. Footer: preview swatch + #RRGGBB + botón Listo
+		val footY = hueY + hueH + 8
+		val curRgb = slotColor(activePickerSlot) and 0xFFFFFF
+		g.fill(svX, footY, svX + 24, footY + 16, 0xFF000000.toInt() or curRgb)
+		g.renderOutline(svX, footY, 24, 16, 0xFFCBD5E0.toInt())
+		g.drawString(font, "#%06X".format(curRgb), svX + 30, footY + 4, 0xFFFFFFFF.toInt(), false)
+
+		val okW = 54; val okX = px + pw - okW - 8
+		val okHover = mouseX in okX..(okX + okW) && mouseY in footY..(footY + 16)
+		g.fill(okX, footY, okX + okW, footY + 16, if (okHover) 0xFF2B6CB0.toInt() else 0xFF1E4E8C.toInt())
+		g.renderOutline(okX, footY, okW, 16, 0xFF63B3ED.toInt())
+		g.drawCenteredString(font, "Listo", okX + okW / 2, footY + 4, 0xFFFFFFFF.toInt())
+
+		pose.popPose()
+	}
+
+	private fun applyPickerAt(mouseX: Double, mouseY: Double) {
+		if (activePickerSlot !in 0..3) return
+		val pb = pickerBounds()
+		val svX = pb[0] + 8; val svY = pb[1] + 22; val svW = pb[2] - 16; val svH = 74
+		val relX = ((mouseX - svX) / max(1, svW - 1).toDouble()).toFloat().coerceIn(0f, 1f)
+		if (pickerDragMode == 2) {
+			pickerHue = relX
+		} else {
+			val relY = ((mouseY - svY) / max(1, svH - 1).toDouble()).toFloat().coerceIn(0f, 1f)
+			pickerSat = relX
+			pickerBri = 1.0f - relY
+		}
+		val rgb = Color.HSBtoRGB(pickerHue, pickerSat, pickerBri) and 0xFFFFFF
+		setSlotColor(activePickerSlot, rgb)
 	}
 
 	private fun renderPlaylistBar(g: GuiGraphics, mouseX: Int, mouseY: Int) {
@@ -425,6 +604,61 @@ class ArenaLightsEditorScreen(
 	private fun absDiff(v: Float): Float = if (v < 0f) -v else v
 
 	override fun mouseClicked(mouseX: Double, mouseY: Double, button: Int): Boolean {
+		if (activePickerSlot in 0..3 && button == 0) {
+			val pb = pickerBounds()
+			val px = pb[0]; val py = pb[1]; val pw = pb[2]; val ph = pb[3]
+			if (mouseX in px.toDouble()..(px + pw).toDouble() && mouseY in py.toDouble()..(py + ph).toDouble()) {
+				val closeX = px + pw - 20; val closeY = py + 5
+				val svX = px + 8; val svY = py + 22; val svW = pw - 16; val svH = 74
+				val hueY = svY + svH + 6; val hueH = 12
+				val footY = hueY + hueH + 8
+				val okW = 54; val okX = px + pw - okW - 8
+				when {
+					mouseX in closeX.toDouble()..(closeX + 14).toDouble() && mouseY in closeY.toDouble()..(closeY + 12).toDouble() -> {
+						activePickerSlot = -1
+						pickerDragMode = 0
+					}
+					mouseX in okX.toDouble()..(okX + okW).toDouble() && mouseY in footY.toDouble()..(footY + 16).toDouble() -> {
+						activePickerSlot = -1
+						pickerDragMode = 0
+					}
+					mouseX in svX.toDouble()..(svX + svW).toDouble() && mouseY in svY.toDouble()..(svY + svH).toDouble() -> {
+						pickerDragMode = 1
+						applyPickerAt(mouseX, mouseY)
+					}
+					mouseX in svX.toDouble()..(svX + svW).toDouble() && mouseY in hueY.toDouble()..(hueY + hueH).toDouble() -> {
+						pickerDragMode = 2
+						applyPickerAt(mouseX, mouseY)
+					}
+				}
+				return true
+			}
+			// Clicking a swatch switches directly to that slot; clicking anywhere else closes popup
+			for (slot in 0..3) {
+				val b = swatchBounds(slot)
+				if (mouseX in b[0].toDouble()..(b[0] + b[2]).toDouble() && mouseY in b[1].toDouble()..(b[1] + b[3]).toDouble()) {
+					activePickerSlot = slot
+					syncPickerFromRgb(slotColor(slot))
+					return true
+				}
+			}
+			activePickerSlot = -1
+			pickerDragMode = 0
+			return true
+		}
+
+		if (button == 0) {
+			for (slot in 0..3) {
+				val b = swatchBounds(slot)
+				if (mouseX in b[0].toDouble()..(b[0] + b[2]).toDouble() && mouseY in b[1].toDouble()..(b[1] + b[3]).toDouble()) {
+					activePickerSlot = slot
+					pickerDragMode = 0
+					syncPickerFromRgb(slotColor(slot))
+					return true
+				}
+			}
+		}
+
 		if (super.mouseClicked(mouseX, mouseY, button)) return true
 
 		val barX = panelX + 10
@@ -516,6 +750,10 @@ class ArenaLightsEditorScreen(
 	}
 
 	override fun mouseDragged(mouseX: Double, mouseY: Double, button: Int, dragX: Double, dragY: Double): Boolean {
+		if (activePickerSlot in 0..3 && pickerDragMode != 0) {
+			applyPickerAt(mouseX, mouseY)
+			return true
+		}
 		if (draggingSlotIndex in playlist.indices) {
 			dragMouseX = mouseX
 			dragMouseY = mouseY
@@ -525,6 +763,10 @@ class ArenaLightsEditorScreen(
 	}
 
 	override fun mouseReleased(mouseX: Double, mouseY: Double, button: Int): Boolean {
+		if (pickerDragMode != 0) {
+			pickerDragMode = 0
+			return true
+		}
 		if (draggingSlotIndex in playlist.indices) {
 			val barX = panelX + 10
 			val step = 110
@@ -537,6 +779,15 @@ class ArenaLightsEditorScreen(
 			return true
 		}
 		return super.mouseReleased(mouseX, mouseY, button)
+	}
+
+	override fun keyPressed(keyCode: Int, scanCode: Int, modifiers: Int): Boolean {
+		if (keyCode == GLFW.GLFW_KEY_ESCAPE && activePickerSlot in 0..3) {
+			activePickerSlot = -1
+			pickerDragMode = 0
+			return true
+		}
+		return super.keyPressed(keyCode, scanCode, modifiers)
 	}
 
 	override fun mouseScrolled(mouseX: Double, mouseY: Double, scrollX: Double, scrollY: Double): Boolean {

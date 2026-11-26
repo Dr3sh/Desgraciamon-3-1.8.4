@@ -99,7 +99,43 @@ object CustomNamesCommands {
                 }
             )
 
+        val tabColorRoot = Commands.literal("tabcolor")
+            .requires { AdminAuth.isAdminSource(it) }
+            .then(Commands.literal("quitar")
+                .then(Commands.argument("jugador", EntityArgument.player())
+                    .executes { ctx ->
+                        val target = EntityArgument.getPlayer(ctx, "jugador")
+                        CustomNamesManager.clearTabColor(target.uuid)
+                        ctx.source.sendSuccess(
+                            { Component.literal("§a[Tablist] §fColor personalizado de §e${target.gameProfile.name} §feliminado.") },
+                            true
+                        )
+                        1
+                    }
+                )
+            )
+            .then(Commands.argument("jugador", EntityArgument.player())
+                .then(Commands.argument("hex", StringArgumentType.word())
+                    .executes { ctx ->
+                        val target = EntityArgument.getPlayer(ctx, "jugador")
+                        val rawHex = StringArgumentType.getString(ctx, "hex").trim().removePrefix("#")
+                        if (!rawHex.matches(Regex("^[0-9a-fA-F]{6}$"))) {
+                            ctx.source.sendFailure(Component.literal("§cColor hex invalido. Usa formato #RRGGBB (ej: #38BDF8)."))
+                            return@executes 0
+                        }
+                        val hex = "#${rawHex.uppercase()}"
+                        CustomNamesManager.setTabColor(target.uuid, hex)
+                        ctx.source.sendSuccess(
+                            { Component.literal("§a[Tablist] §fColor de §e${target.gameProfile.name} §fcambiado a §f$hex§a.") },
+                            true
+                        )
+                        1
+                    }
+                )
+            )
+
         dispatcher.register(apodoRoot)
+        dispatcher.register(tabColorRoot)
     }
 
     private fun clearSelf(source: CommandSourceStack): Int {

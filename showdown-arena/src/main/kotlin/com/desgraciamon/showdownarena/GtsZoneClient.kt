@@ -1,15 +1,20 @@
 package com.desgraciamon.showdownarena
 
+import com.mojang.blaze3d.platform.GlStateManager
 import com.mojang.blaze3d.systems.RenderSystem
 import com.mojang.blaze3d.vertex.BufferBuilder
 import com.mojang.blaze3d.vertex.BufferUploader
+import com.mojang.blaze3d.vertex.ByteBufferBuilder
 import com.mojang.blaze3d.vertex.DefaultVertexFormat
+import com.mojang.blaze3d.vertex.VertexConsumer
 import com.mojang.blaze3d.vertex.VertexFormat
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking
 import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderContext
 import net.minecraft.client.Minecraft
 import net.minecraft.client.gui.GuiGraphics
 import net.minecraft.client.renderer.GameRenderer
+import net.minecraft.client.renderer.MultiBufferSource
+import net.minecraft.client.renderer.RenderType
 import net.minecraft.client.resources.sounds.SimpleSoundInstance
 import net.minecraft.core.BlockPos
 import net.minecraft.core.Direction
@@ -172,46 +177,125 @@ object GtsZoneClient {
 
     private fun lerp(a: Float, b: Float, t: Float): Float = a + (b - a) * t
 
+    private var activeUseIris = false
+    private var activeUsePhoton = false
+    private var activeIrisAlpha = 1.0f
+
     private fun emitQuad(
-        buf: BufferBuilder,
+        buf: VertexConsumer,
         m: Matrix4f,
         x0: Float, y0: Float, z0: Float, r0: Float, g0: Float, b0: Float, a0: Float,
         x1: Float, y1: Float, z1: Float, r1: Float, g1: Float, b1: Float, a1: Float,
         x2: Float, y2: Float, z2: Float, r2: Float, g2: Float, b2: Float, a2: Float,
         x3: Float, y3: Float, z3: Float, r3: Float, g3: Float, b3: Float, a3: Float
     ) {
-        buf.addVertex(m, x0, y0, z0).setColor(r0, g0, b0, a0)
-        buf.addVertex(m, x1, y1, z1).setColor(r1, g1, b1, a1)
-        buf.addVertex(m, x2, y2, z2).setColor(r2, g2, b2, a2)
-        buf.addVertex(m, x3, y3, z3).setColor(r3, g3, b3, a3)
+        if (activeUsePhoton) {
+            ArenaZoneClient.emitPhotonTranslucentQuad(
+                buf, m,
+                x0, y0, z0, r0, g0, b0, a0 * activeIrisAlpha,
+                x1, y1, z1, r1, g1, b1, a1 * activeIrisAlpha,
+                x2, y2, z2, r2, g2, b2, a2 * activeIrisAlpha,
+                x3, y3, z3, r3, g3, b3, a3 * activeIrisAlpha,
+                1.0f
+            )
+            return
+        }
+        if (activeUseIris) {
+            ArenaZoneClient.emitIrisTranslucentQuad(
+                buf, m,
+                x0, y0, z0, r0, g0, b0, a0,
+                x1, y1, z1, r1, g1, b1, a1,
+                x2, y2, z2, r2, g2, b2, a2,
+                x3, y3, z3, r3, g3, b3, a3,
+                activeIrisAlpha
+            )
+            return
+        }
+        buf.addVertex(m, x0, y0, z0).setColor(r0, g0, b0, (a0 * activeIrisAlpha).coerceIn(0f, 1f))
+        buf.addVertex(m, x1, y1, z1).setColor(r1, g1, b1, (a1 * activeIrisAlpha).coerceIn(0f, 1f))
+        buf.addVertex(m, x2, y2, z2).setColor(r2, g2, b2, (a2 * activeIrisAlpha).coerceIn(0f, 1f))
+        buf.addVertex(m, x3, y3, z3).setColor(r3, g3, b3, (a3 * activeIrisAlpha).coerceIn(0f, 1f))
+    }
+
+    private fun emitGlowQuad(
+        buf: VertexConsumer,
+        m: Matrix4f,
+        x0: Float, y0: Float, z0: Float, r0: Float, g0: Float, b0: Float, a0: Float,
+        x1: Float, y1: Float, z1: Float, r1: Float, g1: Float, b1: Float, a1: Float,
+        x2: Float, y2: Float, z2: Float, r2: Float, g2: Float, b2: Float, a2: Float,
+        x3: Float, y3: Float, z3: Float, r3: Float, g3: Float, b3: Float, a3: Float
+    ) {
+        if (activeUsePhoton) {
+            ArenaZoneClient.emitPhotonAdditiveQuad(
+                buf, m,
+                x0, y0, z0, r0, g0, b0, a0 * activeIrisAlpha,
+                x1, y1, z1, r1, g1, b1, a1 * activeIrisAlpha,
+                x2, y2, z2, r2, g2, b2, a2 * activeIrisAlpha,
+                x3, y3, z3, r3, g3, b3, a3 * activeIrisAlpha,
+                1.0f
+            )
+            return
+        }
+        if (activeUseIris) {
+            ArenaZoneClient.emitIrisAdditiveQuad(
+                buf, m,
+                x0, y0, z0, r0, g0, b0, a0,
+                x1, y1, z1, r1, g1, b1, a1,
+                x2, y2, z2, r2, g2, b2, a2,
+                x3, y3, z3, r3, g3, b3, a3,
+                activeIrisAlpha
+            )
+            return
+        }
+        buf.addVertex(m, x0, y0, z0).setColor(r0, g0, b0, (a0 * activeIrisAlpha).coerceIn(0f, 1f))
+        buf.addVertex(m, x1, y1, z1).setColor(r1, g1, b1, (a1 * activeIrisAlpha).coerceIn(0f, 1f))
+        buf.addVertex(m, x2, y2, z2).setColor(r2, g2, b2, (a2 * activeIrisAlpha).coerceIn(0f, 1f))
+        buf.addVertex(m, x3, y3, z3).setColor(r3, g3, b3, (a3 * activeIrisAlpha).coerceIn(0f, 1f))
     }
 
     private fun emitLine(
-        buf: BufferBuilder,
+        buf: VertexConsumer,
         m: Matrix4f,
         x0: Float, y0: Float, z0: Float,
         x1: Float, y1: Float, z1: Float,
         r: Float, g: Float, b: Float, a: Float
     ) {
-        buf.addVertex(m, x0, y0, z0).setColor(r, g, b, a)
-        buf.addVertex(m, x1, y1, z1).setColor(r, g, b, a)
+        if (activeUsePhoton) {
+            ArenaZoneClient.emitPhotonNeonLine(buf, m, x0, y0, z0, r, g, b, a * activeIrisAlpha, x1, y1, z1, r, g, b, a * activeIrisAlpha, 0.025f, 1.0f)
+            return
+        }
+        if (activeUseIris) {
+            ArenaZoneClient.emitIrisNeonLine(buf, m, x0, y0, z0, r, g, b, a, x1, y1, z1, r, g, b, a, 0.025f, activeIrisAlpha)
+            return
+        }
+        val ca = (a * activeIrisAlpha).coerceIn(0f, 1f)
+        buf.addVertex(m, x0, y0, z0).setColor(r, g, b, ca)
+        buf.addVertex(m, x1, y1, z1).setColor(r, g, b, ca)
     }
 
     private fun emitLineGrad(
-        buf: BufferBuilder,
+        buf: VertexConsumer,
         m: Matrix4f,
         x0: Float, y0: Float, z0: Float, r0: Float, g0: Float, b0: Float, a0: Float,
         x1: Float, y1: Float, z1: Float, r1: Float, g1: Float, b1: Float, a1: Float
     ) {
-        buf.addVertex(m, x0, y0, z0).setColor(r0, g0, b0, a0)
-        buf.addVertex(m, x1, y1, z1).setColor(r1, g1, b1, a1)
+        if (activeUsePhoton) {
+            ArenaZoneClient.emitPhotonNeonLine(buf, m, x0, y0, z0, r0, g0, b0, a0 * activeIrisAlpha, x1, y1, z1, r1, g1, b1, a1 * activeIrisAlpha, 0.025f, 1.0f)
+            return
+        }
+        if (activeUseIris) {
+            ArenaZoneClient.emitIrisNeonLine(buf, m, x0, y0, z0, r0, g0, b0, a0, x1, y1, z1, r1, g1, b1, a1, 0.025f, activeIrisAlpha)
+            return
+        }
+        buf.addVertex(m, x0, y0, z0).setColor(r0, g0, b0, (a0 * activeIrisAlpha).coerceIn(0f, 1f))
+        buf.addVertex(m, x1, y1, z1).setColor(r1, g1, b1, (a1 * activeIrisAlpha).coerceIn(0f, 1f))
     }
 
     /**
      * Emite un farol colgante luminoso 3D (cuerpo calido de papel/laton + aureola interna).
      */
     private fun emitLanternQuads(
-        buf: BufferBuilder,
+        buf: VertexConsumer,
         m: Matrix4f,
         lx: Float, ly: Float, lz: Float,
         radius: Float, halfH: Float,
@@ -256,6 +340,9 @@ object GtsZoneClient {
     fun render(context: WorldRenderContext) {
         val zone = currentZone ?: return
         if (!isEnabled) return
+        if (ArenaZoneClient.isIrisRenderingShadowPass()) return
+        val domeExclusionAlpha = (1.0f - ArenaZoneClient.insideDarkRoomFactor).coerceIn(0.0f, 1.0f)
+        if (domeExclusionAlpha <= 0.01f) return
 
         val mc = Minecraft.getInstance()
         val player = mc.player ?: return
@@ -286,10 +373,17 @@ object GtsZoneClient {
         val cx = (centerWorldX - camPos.x).toFloat()
         val cz = (centerWorldZ - camPos.z).toFloat()
 
+        val irisActive = ArenaZoneClient.isIrisShaderPackActive()
+        val isPhoton = irisActive && ArenaZoneClient.isPhotonShaderActive()
+        val consumers = if (irisActive && !isPhoton) context.consumers() else null
+        val useIrisNonPhoton = irisActive && !isPhoton && consumers != null
+        val usePhotonPipeline = isPhoton
+        val useIrisPipeline = useIrisNonPhoton || usePhotonPipeline
+
         val maxRadius = maxOf(halfW, halfD)
         val renderDistBlocks = mc.options.renderDistance().get() * 16.0f
         val fogEnd = RenderSystem.getShaderFogEnd()
-        val effectiveLimit = if (fogEnd > 16.0f) minOf(renderDistBlocks, fogEnd) else renderDistBlocks
+        val effectiveLimit = if (useIrisPipeline) renderDistBlocks else if (fogEnd > 16.0f) minOf(renderDistBlocks, fogEnd) else renderDistBlocks
         val distToEdge = (sqrt(cx * cx + cz * cz) - maxRadius).coerceAtLeast(0.0f)
         if (distToEdge > effectiveLimit * 0.88f) return
         val fogFadeStart = effectiveLimit * 0.58f
@@ -298,7 +392,8 @@ object GtsZoneClient {
         } else {
             (1.0f - (distToEdge - fogFadeStart) / (effectiveLimit * 0.30f).coerceAtLeast(1.0f)).coerceIn(0.0f, 1.0f)
         }
-        if (fogAlpha <= 0.01f) return
+        val effectiveAlpha = fogAlpha * domeExclusionAlpha
+        if (effectiveAlpha <= 0.01f) return
 
         val minR = minOf(halfW, halfD)
         val timeSeconds = (System.currentTimeMillis() % 1000000L) / 1000.0
@@ -368,14 +463,21 @@ object GtsZoneClient {
         val goldR = 1.00f; val goldG = 0.78f + pulse * 0.10f; val goldB = 0.16f
         val emR = 0.10f; val emG = 0.84f + pulse * 0.08f; val emB = 0.48f
 
+        activeUseIris = useIrisNonPhoton
+        activeUsePhoton = usePhotonPipeline
+        activeIrisAlpha = effectiveAlpha
+
         matrices.pushPose()
 
         RenderSystem.enableBlend()
         RenderSystem.defaultBlendFunc()
+        RenderSystem.enableDepthTest()
+        RenderSystem.depthFunc(org.lwjgl.opengl.GL11.GL_LEQUAL)
         RenderSystem.disableCull()
         RenderSystem.depthMask(false)
         RenderSystem.enablePolygonOffset()
         RenderSystem.polygonOffset(-1.0f, -2.0f)
+        RenderSystem.setShaderColor(1.0f, 1.0f, 1.0f, effectiveAlpha)
         RenderSystem.setShader(GameRenderer::getPositionColorShader)
 
         val tessellator = RenderSystem.renderThreadTesselator()
@@ -385,7 +487,24 @@ object GtsZoneClient {
         // PASS 1: TRANSLUCENT QUADS (Tent Posts, Striped Bazaar Awnings, Swaying
         //         Market Lanterns, Central Chandelier, Bazaar Floor Medallion, Motes)
         // =========================================================================
-        val quadBuffer = tessellator.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR)
+        val photonTransAlloc: ByteBufferBuilder? = if (usePhotonPipeline) ByteBufferBuilder(262144) else null
+        val photonAddAlloc: ByteBufferBuilder? = if (usePhotonPipeline) ByteBufferBuilder(262144) else null
+        val photonTransBuf: BufferBuilder? = photonTransAlloc?.let { BufferBuilder(it, VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR) }
+        val photonAddBuf: BufferBuilder? = photonAddAlloc?.let { BufferBuilder(it, VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR) }
+        val quadBuffer: VertexConsumer = if (usePhotonPipeline) {
+            photonTransBuf!!
+        } else if (useIrisNonPhoton) {
+            consumers!!.getBuffer(ArenaZoneClient.irisTranslucentType())
+        } else {
+            tessellator.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR)
+        }
+        val irisAddBuffer: VertexConsumer = if (usePhotonPipeline) {
+            photonAddBuf!!
+        } else if (useIrisNonPhoton) {
+            consumers!!.getBuffer(ArenaZoneClient.irisAdditiveType())
+        } else {
+            quadBuffer
+        }
 
         // 1A. Perimeter Merchant Tent Posts with Golden Finials
         val postR = 0.11f
@@ -412,27 +531,30 @@ object GtsZoneClient {
                 )
             }
 
-            // Golden diamond finial atop each post
+            // Golden diamond finial atop each post (non-degenerate cap for Iris/Photon compatibility)
             val fMidY = topY + finialH * 0.45f
             val fTopY = topY + finialH
             val fR = 0.19f
+            val fCapR = 0.015f
             val fx = floatArrayOf(px + fR, px, px - fR, px)
             val fz = floatArrayOf(pz, pz + fR, pz, pz - fR)
+            val fcx = floatArrayOf(px + fCapR, px, px - fCapR, px)
+            val fcz = floatArrayOf(pz, pz + fCapR, pz, pz - fCapR)
             for (k in 0 until 4) {
                 val next = (k + 1) % 4
                 emitQuad(
                     quadBuffer, matrix,
-                    px, fTopY, pz, 1.0f, 0.96f, 0.56f, 0.78f,
+                    fcx[k], fTopY, fcz[k], 1.0f, 0.96f, 0.56f, 0.78f,
                     fx[k], fMidY, fz[k], goldR, goldG, goldB, 0.68f,
                     fx[next], fMidY, fz[next], goldR, goldG, goldB, 0.68f,
-                    px, fTopY, pz, 1.0f, 0.96f, 0.56f, 0.78f
+                    fcx[next], fTopY, fcz[next], 1.0f, 0.96f, 0.56f, 0.78f
                 )
                 emitQuad(
                     quadBuffer, matrix,
-                    px, topY, pz, 0.90f, 0.52f, 0.12f, 0.62f,
+                    fcx[k], topY, fcz[k], 0.90f, 0.52f, 0.12f, 0.62f,
                     fx[next], fMidY, fz[next], goldR, goldG, goldB, 0.68f,
                     fx[k], fMidY, fz[k], goldR, goldG, goldB, 0.68f,
-                    px, topY, pz, 0.90f, 0.52f, 0.12f, 0.62f
+                    fcx[next], topY, fcz[next], 0.90f, 0.52f, 0.12f, 0.62f
                 )
             }
         }
@@ -528,8 +650,8 @@ object GtsZoneClient {
             // Subtle warm amber ground threshold glow ribbon between post bases
             val gy0 = postY[i] + 0.025f
             val gy1 = postY[next] + 0.025f
-            emitQuad(
-                quadBuffer, matrix,
+            emitGlowQuad(
+                irisAddBuffer, matrix,
                 x0, gy0, z0, goldR, goldG, goldB, 0.26f + pulse * 0.10f,
                 x1, gy1, z1, goldR, goldG, goldB, 0.26f + pulse * 0.10f,
                 x1, gy1 + 0.08f, z1, crimR, crimG, crimB, 0.04f,
@@ -565,7 +687,7 @@ object GtsZoneClient {
 
         // 1D. Cozy Bazaar Floor Medallion & Woven Merchant Carpet Inlay
         val medR = (minR * 0.42f).coerceIn(1.8f, 7.6f)
-        val medY = centerGroundY + 0.052f
+        val medY = centerGroundY + 0.068f
         val outerIn = medR * 0.86f
         val midOut = medR * 0.62f
         val midIn = medR * 0.54f
@@ -599,12 +721,13 @@ object GtsZoneClient {
 
             // Center glowing golden coin emblem
             val ca = 0.40f + pulse * 0.22f
+            val coinInner = 0.015f
             emitQuad(
                 quadBuffer, matrix,
-                cx, medY + 0.004f, cz, 1.0f, 0.96f, 0.58f, ca,
+                cx + c0 * coinInner, medY + 0.004f, cz + s0 * coinInner, 1.0f, 0.96f, 0.58f, ca,
                 cx + c0 * coinR, medY + 0.004f, cz + s0 * coinR, goldR, goldG, goldB, ca * 0.55f,
                 cx + c1 * coinR, medY + 0.004f, cz + s1 * coinR, goldR, goldG, goldB, ca * 0.55f,
-                cx, medY + 0.004f, cz, 1.0f, 0.96f, 0.58f, ca
+                cx + c1 * coinInner, medY + 0.004f, cz + s1 * coinInner, 1.0f, 0.96f, 0.58f, ca
             )
         }
 
@@ -657,8 +780,8 @@ object GtsZoneClient {
             val mg = if (m % 5 == 0) 0.96f else 0.86f
             val mb = if (m % 5 == 0) 0.58f else 0.20f
 
-            emitQuad(
-                quadBuffer, matrix,
+            emitGlowQuad(
+                irisAddBuffer, matrix,
                 mx, my - sizeH, mz, mr, mg, mb, moteAlpha,
                 mx + sc * sizeW, my, mz + ss * sizeW, 1.0f, 0.98f, 0.74f, moteAlpha,
                 mx, my + sizeH, mz, mr, mg, mb, moteAlpha,
@@ -666,14 +789,20 @@ object GtsZoneClient {
             )
         }
 
-        quadBuffer.build()?.let { BufferUploader.drawWithShader(it) }
+        if (!useIrisPipeline && quadBuffer is BufferBuilder) {
+            quadBuffer.build()?.let { BufferUploader.drawWithShader(it) }
+        }
 
         // =========================================================================
         // PASS 2: WARM BAZAAR STRUCTURAL LINES (Archways, Festoon Lantern Cords,
         //         Corner Garlands to Chandelier, Medallion Trim)
         // =========================================================================
         RenderSystem.lineWidth(2.6f)
-        val lineBuffer = tessellator.begin(VertexFormat.Mode.DEBUG_LINES, DefaultVertexFormat.POSITION_COLOR)
+        val lineBuffer: VertexConsumer = if (useIrisPipeline) {
+            irisAddBuffer
+        } else {
+            tessellator.begin(VertexFormat.Mode.DEBUG_LINES, DefaultVertexFormat.POSITION_COLOR)
+        }
         val lineAlpha = 0.84f + pulse * 0.14f
 
         // 2A. Merchant Tent Posts Vertical Highlight & Ground Rings
@@ -806,7 +935,28 @@ object GtsZoneClient {
             )
         }
 
-        lineBuffer.build()?.let { BufferUploader.drawWithShader(it) }
+        if (usePhotonPipeline) {
+            RenderSystem.setShader(GameRenderer::getPositionColorShader)
+            RenderSystem.enableBlend()
+            RenderSystem.defaultBlendFunc()
+            photonTransBuf?.build()?.let { BufferUploader.drawWithShader(it) }
+            RenderSystem.blendFunc(GlStateManager.SourceFactor.SRC_ALPHA, GlStateManager.DestFactor.ONE)
+            photonAddBuf?.build()?.let { BufferUploader.drawWithShader(it) }
+            RenderSystem.defaultBlendFunc()
+            photonTransAlloc?.close()
+            photonAddAlloc?.close()
+        } else if (!useIrisPipeline && lineBuffer is BufferBuilder) {
+            lineBuffer.build()?.let { BufferUploader.drawWithShader(it) }
+        } else if (useIrisNonPhoton && consumers is MultiBufferSource.BufferSource) {
+            val transType = ArenaZoneClient.irisTranslucentType()
+            val addType = ArenaZoneClient.irisAdditiveType()
+            consumers.endBatch(transType)
+            if (addType !== transType) consumers.endBatch(addType)
+        }
+
+        activeUseIris = false
+        activeUsePhoton = false
+        activeIrisAlpha = 1.0f
 
         RenderSystem.setShaderColor(1.0f, 1.0f, 1.0f, 1.0f)
         RenderSystem.disablePolygonOffset()

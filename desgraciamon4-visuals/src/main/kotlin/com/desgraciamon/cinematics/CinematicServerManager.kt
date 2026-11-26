@@ -178,6 +178,10 @@ object CinematicServerManager {
         val routeJson = CinematicRouteStorage.toJson(route)
         val requiredAnims = route.collectRequiredAnimations()
 
+        val startPos = route.evaluatePosition(0.0)
+        val startCp = ChunkPos(BlockPos(startPos.x.toInt(), startPos.y.toInt(), startPos.z.toInt()))
+        forceChunkRadius(targetLevel, startCp, 2)
+
         for (player in participants) {
             activeParticipants.add(player.uuid)
             initialPlayerStates[player.uuid] = PlayerInitialState(
@@ -190,6 +194,10 @@ object CinematicServerManager {
             if (route.freezePlayers) {
                 frozenPlayers.add(player.uuid)
             }
+            if (player.level() != targetLevel) {
+                player.teleportTo(targetLevel, startPos.x, startPos.y, startPos.z, player.yRot, player.xRot)
+            }
+            sendChunksAround(player, targetLevel, startCp, 4)
             CinematicPackets.prepare(player, route.name, routeJson, requiredAnims)
         }
         saveRestoreStatesToDisk(server)
@@ -398,26 +406,30 @@ object CinematicServerManager {
             }
         }
 
-        // Mantener chunks cargados y enviados a los participantes alrededor de camPos sin teletransportar ni ocultar al jugador
+        // Mantener chunks cargados y enviados a los participantes alrededor de camPos
         val targetLevel = resolveRouteLevel(server, route)
         val camPos = route.evaluatePosition(elapsedSec)
         val camCp = ChunkPos(BlockPos(camPos.x.toInt(), camPos.y.toInt(), camPos.z.toInt()))
-        forceChunkRadius(targetLevel, camCp, 1)
+        forceChunkRadius(targetLevel, camCp, 2)
 
         for (uuid in activeParticipants) {
             val player = server.playerList.getPlayer(uuid) ?: continue
             if (player.level() != targetLevel) continue
-            val sent = sentChunksByPlayer.computeIfAbsent(uuid) { ConcurrentHashMap.newKeySet() }
-            player.connection.send(ClientboundSetChunkCacheCenterPacket(camCp.x, camCp.z))
-            for (dx in -2..2) {
-                for (dz in -2..2) {
-                    val cx = camCp.x + dx
-                    val cz = camCp.z + dz
-                    val key = ChunkPos.asLong(cx, cz)
-                    if (sent.add(key)) {
-                        val chunk = targetLevel.getChunk(cx, cz)
-                        player.connection.send(ClientboundLevelChunkWithLightPacket(chunk, targetLevel.lightEngine, null, null))
-                    }
+            sendChunksAround(player, targetLevel, camCp, 4)
+        }
+    }
+
+    private fun sendChunksAround(player: ServerPlayer, level: ServerLevel, center: ChunkPos, radius: Int) {
+        val sent = sentChunksByPlayer.computeIfAbsent(player.uuid) { ConcurrentHashMap.newKeySet() }
+        player.connection.send(ClientboundSetChunkCacheCenterPacket(center.x, center.z))
+        for (dx in -radius..radius) {
+            for (dz in -radius..radius) {
+                val cx = center.x + dx
+                val cz = center.z + dz
+                val key = ChunkPos.asLong(cx, cz)
+                if (sent.add(key)) {
+                    val chunk = level.getChunk(cx, cz)
+                    player.connection.send(ClientboundLevelChunkWithLightPacket(chunk, level.lightEngine, null, null))
                 }
             }
         }

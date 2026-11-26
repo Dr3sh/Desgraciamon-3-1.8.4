@@ -245,6 +245,9 @@ object SkyLogoClient {
         val pulse = (sin(elapsed * 2.6f) * 0.5f + 0.5f)
         val camPos = context.camera().position
         val matrices = context.matrixStack() ?: return
+        val consumers = context.consumers()
+        val useIrisPipeline = ArenaZoneClient.isIrisShaderPackActive() && consumers != null
+        val usePhoton = useIrisPipeline && ArenaZoneClient.isPhotonShaderActive()
         val tessellator = RenderSystem.renderThreadTesselator()
 
         // Distant firework burst sound
@@ -294,7 +297,7 @@ object SkyLogoClient {
         // 1. Render '3' first (once its constellation completes at ~4.0s)
         if (threeAlpha > 0.01f) {
             drawLogoSingleOutline(
-                tessellator, m, TEX_THREE,
+                tessellator, consumers, useIrisPipeline, usePhoton, m, TEX_THREE,
                 halfW * (0.94f + 0.06f * bodyEaseOut + exitProg * 0.06f),
                 halfH * (0.94f + 0.06f * bodyEaseOut + exitProg * 0.06f),
                 0.02f, threeAlpha, pulse, threeFlash
@@ -304,15 +307,22 @@ object SkyLogoClient {
         // 2. Render 'D _ SGRACIAMON' after the '3' constellation reveals
         if (bodyAlpha > 0.01f) {
             drawLogoSingleOutline(
-                tessellator, m, TEX_BODY,
+                tessellator, consumers, useIrisPipeline, usePhoton, m, TEX_BODY,
                 halfW * bodyScale, halfH * bodyScale,
                 0.0f, bodyAlpha, pulse, 0.0f
             )
         }
 
         // 3. Render Constellation Stars, Constellation Beams, Orbiting Halo & 68 Multi-Color Fireworks
-        RenderSystem.setShader(GameRenderer::getPositionColorShader)
-        val fwBuf = tessellator.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR)
+        if (!useIrisPipeline) {
+            RenderSystem.setShader(GameRenderer::getPositionColorShader)
+        }
+        val fwAddType = if (useIrisPipeline && !usePhoton) ArenaZoneClient.irisAdditiveType() else null
+        val fwBuf: com.mojang.blaze3d.vertex.VertexConsumer = if (useIrisPipeline && !usePhoton) {
+            consumers!!.getBuffer(fwAddType!!)
+        } else {
+            tessellator.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR)
+        }
         var hasFw = false
 
         // 3A. '3' Constellation stars appearing with fade & moving into formation
@@ -330,8 +340,8 @@ object SkyLogoClient {
 
                 if (sAlpha > 0.02f) {
                     val twinkle = 0.80f + 0.20f * sin(elapsed * 5.0f + i)
-                    emitBillboardQuad(fwBuf, m, cx, cy, cz, 3.6f, 3.6f, 0.36f, 0.88f, 1.0f, sAlpha * 0.45f * twinkle)
-                    emitBillboardQuad(fwBuf, m, cx, cy, cz, 1.4f, 1.4f, 0.92f, 0.99f, 1.0f, sAlpha * 0.95f * twinkle)
+                    emitBillboardQuad(fwBuf, useIrisPipeline, usePhoton, m, cx, cy, cz, 3.6f, 3.6f, 0.36f, 0.88f, 1.0f, sAlpha * 0.45f * twinkle)
+                    emitBillboardQuad(fwBuf, useIrisPipeline, usePhoton, m, cx, cy, cz, 1.4f, 1.4f, 0.92f, 0.99f, 1.0f, sAlpha * 0.95f * twinkle)
                     hasFw = true
                 }
             }
@@ -346,10 +356,22 @@ object SkyLogoClient {
                     val len = kotlin.math.sqrt(dx * dx + dy * dy).coerceAtLeast(0.01f)
                     val nx = -dy / len * 0.45f
                     val ny = dx / len * 0.45f
-                    fwBuf.addVertex(m, p0.first - nx, p0.second - ny, p0.third).setColor(0.45f, 0.92f, 1.0f, constellationLineAlpha * 0.78f)
-                    fwBuf.addVertex(m, p0.first + nx, p0.second + ny, p0.third).setColor(0.45f, 0.92f, 1.0f, constellationLineAlpha * 0.78f)
-                    fwBuf.addVertex(m, p1.first + nx, p1.second + ny, p1.third).setColor(0.45f, 0.92f, 1.0f, constellationLineAlpha * 0.78f)
-                    fwBuf.addVertex(m, p1.first - nx, p1.second - ny, p1.third).setColor(0.45f, 0.92f, 1.0f, constellationLineAlpha * 0.78f)
+                    val la = constellationLineAlpha * 0.78f
+                    if (usePhoton) {
+                        ArenaZoneClient.emitPhotonAdditiveQuad(
+                            fwBuf, m,
+                            p0.first - nx, p0.second - ny, p0.third, 0.45f, 0.92f, 1.0f, la,
+                            p0.first + nx, p0.second + ny, p0.third, 0.45f, 0.92f, 1.0f, la,
+                            p1.first + nx, p1.second + ny, p1.third, 0.45f, 0.92f, 1.0f, la,
+                            p1.first - nx, p1.second - ny, p1.third, 0.45f, 0.92f, 1.0f, la,
+                            1.0f
+                        )
+                    } else {
+                        emitFwVertex(fwBuf, useIrisPipeline, usePhoton, m, p0.first - nx, p0.second - ny, p0.third, 0.45f, 0.92f, 1.0f, la)
+                        emitFwVertex(fwBuf, useIrisPipeline, usePhoton, m, p0.first + nx, p0.second + ny, p0.third, 0.45f, 0.92f, 1.0f, la)
+                        emitFwVertex(fwBuf, useIrisPipeline, usePhoton, m, p1.first + nx, p1.second + ny, p1.third, 0.45f, 0.92f, 1.0f, la)
+                        emitFwVertex(fwBuf, useIrisPipeline, usePhoton, m, p1.first - nx, p1.second - ny, p1.third, 0.45f, 0.92f, 1.0f, la)
+                    }
                     hasFw = true
                 }
             }
@@ -368,10 +390,21 @@ object SkyLogoClient {
                 val x0 = cos(a0) * ringRx; val y0 = sin(a0) * ringRy
                 val x1 = cos(a1) * ringRx; val y1 = sin(a1) * ringRy
                 val thick = 1.4f
-                fwBuf.addVertex(m, x0, y0, 0.1f).setColor(0.45f, 0.90f, 1.0f, ringAlpha)
-                fwBuf.addVertex(m, x1, y1, 0.1f).setColor(0.45f, 0.90f, 1.0f, ringAlpha)
-                fwBuf.addVertex(m, x1 + cos(a1) * thick, y1 + sin(a1) * thick, 0.1f).setColor(0.45f, 0.90f, 1.0f, 0.0f)
-                fwBuf.addVertex(m, x0 + cos(a0) * thick, y0 + sin(a0) * thick, 0.1f).setColor(0.45f, 0.90f, 1.0f, 0.0f)
+                if (usePhoton) {
+                    ArenaZoneClient.emitPhotonAdditiveQuad(
+                        fwBuf, m,
+                        x0, y0, 0.1f, 0.45f, 0.90f, 1.0f, ringAlpha,
+                        x1, y1, 0.1f, 0.45f, 0.90f, 1.0f, ringAlpha,
+                        x1 + cos(a1) * thick, y1 + sin(a1) * thick, 0.1f, 0.45f, 0.90f, 1.0f, 0.0f,
+                        x0 + cos(a0) * thick, y0 + sin(a0) * thick, 0.1f, 0.45f, 0.90f, 1.0f, 0.0f,
+                        1.0f
+                    )
+                } else {
+                    emitFwVertex(fwBuf, useIrisPipeline, usePhoton, m, x0, y0, 0.1f, 0.45f, 0.90f, 1.0f, ringAlpha)
+                    emitFwVertex(fwBuf, useIrisPipeline, usePhoton, m, x1, y1, 0.1f, 0.45f, 0.90f, 1.0f, ringAlpha)
+                    emitFwVertex(fwBuf, useIrisPipeline, usePhoton, m, x1 + cos(a1) * thick, y1 + sin(a1) * thick, 0.1f, 0.45f, 0.90f, 1.0f, 0.0f)
+                    emitFwVertex(fwBuf, useIrisPipeline, usePhoton, m, x0 + cos(a0) * thick, y0 + sin(a0) * thick, 0.1f, 0.45f, 0.90f, 1.0f, 0.0f)
+                }
                 hasFw = true
             }
         }
@@ -385,8 +418,8 @@ object SkyLogoClient {
             val sz = sin(elapsed * 2.0f + s) * 2.2f
             val twinkle = (sin(elapsed * 4.5f + s * 1.7f) * 0.5f + 0.5f) * bodyAlpha
             if (twinkle > 0.04f) {
-                emitBillboardQuad(fwBuf, m, sx, sy, sz, 1.6f, 1.6f, 0.48f, 0.90f, 1.0f, twinkle * 0.55f)
-                emitBillboardQuad(fwBuf, m, sx, sy, sz, 0.72f, 0.72f, 0.95f, 0.99f, 1.0f, twinkle * 0.90f)
+                emitBillboardQuad(fwBuf, useIrisPipeline, usePhoton, m, sx, sy, sz, 1.6f, 1.6f, 0.48f, 0.90f, 1.0f, twinkle * 0.55f)
+                emitBillboardQuad(fwBuf, useIrisPipeline, usePhoton, m, sx, sy, sz, 0.72f, 0.72f, 0.95f, 0.99f, 1.0f, twinkle * 0.90f)
                 hasFw = true
             }
         }
@@ -400,8 +433,8 @@ object SkyLogoClient {
                 val rx = fw.offsetX
                 val ry = fw.offsetY
                 val rz = fw.offsetZ + 38.0f * (1.0f - prog)
-                emitBillboardQuad(fwBuf, m, rx, ry, rz, 0.85f, 0.85f, fw.colorR, fw.colorG, fw.colorB, 0.85f * globalFadeOut)
-                emitBillboardQuad(fwBuf, m, rx, ry, rz + 2.2f, 1.6f, 1.6f, 0.92f, 0.98f, 1.0f, 0.55f * globalFadeOut)
+                emitBillboardQuad(fwBuf, useIrisPipeline, usePhoton, m, rx, ry, rz, 0.85f, 0.85f, fw.colorR, fw.colorG, fw.colorB, 0.85f * globalFadeOut)
+                emitBillboardQuad(fwBuf, useIrisPipeline, usePhoton, m, rx, ry, rz + 2.2f, 1.6f, 1.6f, 0.92f, 0.98f, 1.0f, 0.55f * globalFadeOut)
                 hasFw = true
             } else {
                 val age = elapsed - fw.burstSec
@@ -420,17 +453,25 @@ object SkyLogoClient {
                     val g = (fw.colorG + sp.tintWhite * (1.0f - fw.colorG)).coerceIn(0f, 1f)
                     val b = (fw.colorB + sp.tintWhite * (1.0f - fw.colorB)).coerceIn(0f, 1f)
 
-                    emitBillboardQuad(fwBuf, m, sx, sy, sz, sp.size * 2.7f, sp.size * 2.7f, r, g, b, fade * 0.48f)
-                    emitBillboardQuad(fwBuf, m, sx, sy, sz, sp.size, sp.size, 0.96f, 0.98f, 1.0f, fade * 0.96f)
+                    emitBillboardQuad(fwBuf, useIrisPipeline, usePhoton, m, sx, sy, sz, sp.size * 2.7f, sp.size * 2.7f, r, g, b, fade * 0.48f)
+                    emitBillboardQuad(fwBuf, useIrisPipeline, usePhoton, m, sx, sy, sz, sp.size, sp.size, 0.96f, 0.98f, 1.0f, fade * 0.96f)
                     hasFw = true
                 }
             }
         }
 
-        if (hasFw) {
-            BufferUploader.drawWithShader(fwBuf.buildOrThrow())
-        } else {
-            runCatching { fwBuf.build()?.close() }
+        if ((!useIrisPipeline || usePhoton) && fwBuf is BufferBuilder) {
+            if (usePhoton) {
+                RenderSystem.setShader(GameRenderer::getPositionColorShader)
+                RenderSystem.defaultBlendFunc()
+            }
+            if (hasFw) {
+                BufferUploader.drawWithShader(fwBuf.buildOrThrow())
+            } else {
+                runCatching { fwBuf.build()?.close() }
+            }
+        } else if (useIrisPipeline && !usePhoton && consumers is net.minecraft.client.renderer.MultiBufferSource.BufferSource) {
+            if (fwAddType != null) consumers.endBatch(fwAddType)
         }
 
         matrices.popPose()
@@ -443,6 +484,9 @@ object SkyLogoClient {
 
     private fun drawLogoSingleOutline(
         tessellator: com.mojang.blaze3d.vertex.Tesselator,
+        consumers: net.minecraft.client.renderer.MultiBufferSource?,
+        useIrisPipeline: Boolean,
+        usePhoton: Boolean,
         m: Matrix4f,
         tex: ResourceLocation,
         halfW: Float,
@@ -452,19 +496,53 @@ object SkyLogoClient {
         pulse: Float,
         extraFlash: Float
     ) {
+        val bloomA = ((0.70f + pulse * 0.18f + extraFlash * 0.30f) * alpha).coerceIn(0.0f, 1.0f)
+        val coreA = ((0.94f + pulse * 0.06f) * alpha).coerceIn(0.0f, 1.0f)
+        val coreR = (0.74f + extraFlash * 0.26f).coerceIn(0.0f, 1.0f)
+
+        if (useIrisPipeline && consumers != null) {
+            val rt = net.minecraft.client.renderer.RenderType.text(tex)
+            val buf = consumers.getBuffer(rt)
+            val paBloom = if (usePhoton && bloomA > 0.015f) bloomA.coerceAtLeast(0.14f) else bloomA
+            val paCore = if (usePhoton && coreA > 0.015f) coreA.coerceAtLeast(0.14f) else coreA
+            emitIrisTexturedQuad(buf, m, halfW, halfH, zOffset, 0.36f, 0.86f, 1.0f, paBloom)
+            emitIrisTexturedQuad(buf, m, halfW, halfH, zOffset + 0.02f, coreR, 0.96f, 1.0f, paCore)
+            if (consumers is net.minecraft.client.renderer.MultiBufferSource.BufferSource) {
+                consumers.endBatch(rt)
+            }
+            return
+        }
+
         RenderSystem.setShader(GameRenderer::getPositionTexColorShader)
         RenderSystem.setShaderTexture(0, tex)
 
         val buf = tessellator.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_TEX_COLOR)
-
-        val bloomA = ((0.70f + pulse * 0.18f + extraFlash * 0.30f) * alpha).coerceIn(0.0f, 1.0f)
         emitTexturedQuad(buf, m, halfW, halfH, zOffset, 0.36f, 0.86f, 1.0f, bloomA)
-
-        val coreA = ((0.94f + pulse * 0.06f) * alpha).coerceIn(0.0f, 1.0f)
-        val coreR = (0.74f + extraFlash * 0.26f).coerceIn(0.0f, 1.0f)
         emitTexturedQuad(buf, m, halfW, halfH, zOffset + 0.02f, coreR, 0.96f, 1.0f, coreA)
-
         BufferUploader.drawWithShader(buf.buildOrThrow())
+    }
+
+    private fun emitIrisTexturedQuad(
+        buf: com.mojang.blaze3d.vertex.VertexConsumer,
+        m: Matrix4f,
+        halfW: Float,
+        halfH: Float,
+        z: Float,
+        r: Float,
+        g: Float,
+        b: Float,
+        a: Float
+    ) {
+        val lb = net.minecraft.client.renderer.LightTexture.FULL_BRIGHT
+        buf.addVertex(m, -halfW, -halfH, z).setColor(r, g, b, a).setUv(0.0f, 1.0f).setLight(lb)
+        buf.addVertex(m, halfW, -halfH, z).setColor(r, g, b, a).setUv(1.0f, 1.0f).setLight(lb)
+        buf.addVertex(m, halfW, halfH, z).setColor(r, g, b, a).setUv(1.0f, 0.0f).setLight(lb)
+        buf.addVertex(m, -halfW, halfH, z).setColor(r, g, b, a).setUv(0.0f, 0.0f).setLight(lb)
+
+        buf.addVertex(m, -halfW, halfH, z).setColor(r, g, b, a).setUv(0.0f, 0.0f).setLight(lb)
+        buf.addVertex(m, halfW, halfH, z).setColor(r, g, b, a).setUv(1.0f, 0.0f).setLight(lb)
+        buf.addVertex(m, halfW, -halfH, z).setColor(r, g, b, a).setUv(1.0f, 1.0f).setLight(lb)
+        buf.addVertex(m, -halfW, -halfH, z).setColor(r, g, b, a).setUv(0.0f, 1.0f).setLight(lb)
     }
 
     private fun emitTexturedQuad(
@@ -484,8 +562,26 @@ object SkyLogoClient {
         buf.addVertex(m, -halfW, halfH, z).setUv(0.0f, 0.0f).setColor(r, g, b, a)
     }
 
+    private fun emitFwVertex(
+        buf: com.mojang.blaze3d.vertex.VertexConsumer,
+        useIrisPipeline: Boolean,
+        usePhoton: Boolean,
+        m: Matrix4f,
+        x: Float,
+        y: Float,
+        z: Float,
+        r: Float,
+        g: Float,
+        b: Float,
+        a: Float
+    ) {
+        buf.addVertex(m, x, y, z).setColor(r, g, b, a.coerceIn(0f, 1f))
+    }
+
     private fun emitBillboardQuad(
-        buf: BufferBuilder,
+        buf: com.mojang.blaze3d.vertex.VertexConsumer,
+        useIrisPipeline: Boolean,
+        usePhoton: Boolean,
         m: Matrix4f,
         x: Float,
         y: Float,
@@ -499,10 +595,21 @@ object SkyLogoClient {
     ) {
         val hw = w * 0.5f
         val hh = h * 0.5f
-        buf.addVertex(m, x - hw, y - hh, z).setColor(r, g, b, a)
-        buf.addVertex(m, x + hw, y - hh, z).setColor(r, g, b, a)
-        buf.addVertex(m, x + hw, y + hh, z).setColor(r, g, b, a)
-        buf.addVertex(m, x - hw, y + hh, z).setColor(r, g, b, a)
+        if (usePhoton) {
+            ArenaZoneClient.emitPhotonAdditiveQuad(
+                buf, m,
+                x - hw, y - hh, z, r, g, b, a,
+                x + hw, y - hh, z, r, g, b, a,
+                x + hw, y + hh, z, r, g, b, a,
+                x - hw, y + hh, z, r, g, b, a,
+                1.0f
+            )
+            return
+        }
+        emitFwVertex(buf, useIrisPipeline, usePhoton, m, x - hw, y - hh, z, r, g, b, a)
+        emitFwVertex(buf, useIrisPipeline, usePhoton, m, x + hw, y - hh, z, r, g, b, a)
+        emitFwVertex(buf, useIrisPipeline, usePhoton, m, x + hw, y + hh, z, r, g, b, a)
+        emitFwVertex(buf, useIrisPipeline, usePhoton, m, x - hw, y + hh, z, r, g, b, a)
     }
 
     private fun lerp(a: Float, b: Float, t: Float): Float = a + (b - a) * t

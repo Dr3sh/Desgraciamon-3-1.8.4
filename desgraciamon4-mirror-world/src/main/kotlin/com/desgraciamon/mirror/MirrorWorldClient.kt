@@ -59,14 +59,16 @@ class MirrorWorldClient : ClientModInitializer {
         private var originDimension: net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level>? = null
         private var isTransitionEntering = true
 
-        private var inboundDurationMs = 1750f
-        private var holdDurationMs = 450f
-        private var outboundDurationMs = 1750f
+        private var inboundDurationMs = 900f
+        private var holdDurationMs = 250f
+        private var outboundDurationMs = 900f
         private var currentProgress = 0.0f
+        private val clientStartMillis = System.currentTimeMillis()
 
         // Rastro etéreo de memoria dejado por los Pokémon
         data class MemoryTrailPoint(val pos: Vec3, val timeMs: Long, val width: Float)
         private val pokemonTrails = ConcurrentHashMap<UUID, MutableList<MemoryTrailPoint>>()
+        private val entityOrigins = ConcurrentHashMap<Int, String>()
 
         fun triggerTransition(fadeIn: Int, hold: Int, fadeOut: Int) {
             val client = Minecraft.getInstance()
@@ -74,17 +76,17 @@ class MirrorWorldClient : ClientModInitializer {
             originDimension = currentDim
             isTransitionEntering = currentDim != MirrorRules.DIMENSION_KEY && currentDim != MirrorRules.RECUERDOS_DIMENSION_KEY
 
-            inboundDurationMs = fadeIn.coerceAtLeast(600).toFloat()
-            holdDurationMs = hold.coerceAtLeast(300).toFloat()
-            outboundDurationMs = fadeOut.coerceAtLeast(600).toFloat()
+            inboundDurationMs = fadeIn.coerceIn(500, 1400).toFloat()
+            holdDurationMs = hold.coerceIn(150, 600).toFloat()
+            outboundDurationMs = fadeOut.coerceIn(500, 1400).toFloat()
 
             currentPhase = TransitionPhase.INBOUND
             phaseStartMillis = System.currentTimeMillis()
             currentProgress = 0.0f
         }
 
-        fun triggerOutboundDissolve(durationMs: Int = 2200) {
-            outboundDurationMs = durationMs.toFloat()
+        fun triggerOutboundDissolve(durationMs: Int = 900) {
+            outboundDurationMs = durationMs.coerceIn(500, 1400).toFloat()
             currentPhase = TransitionPhase.OUTBOUND
             phaseStartMillis = System.currentTimeMillis()
             currentProgress = 0.5f
@@ -94,8 +96,19 @@ class MirrorWorldClient : ClientModInitializer {
 
         fun isTransitionActive(): Boolean = currentPhase != TransitionPhase.IDLE
 
+        private fun computeFadeIntensity(p: Float): Float {
+            if (p <= 0.0f || p >= 1.0f) return 0.0f
+            return if (p < 0.5f) {
+                val t = (p / 0.5f).coerceIn(0.0f, 1.0f)
+                t * t * (3.0f - 2.0f * t)
+            } else {
+                val t = ((1.0f - p) / 0.5f).coerceIn(0.0f, 1.0f)
+                t * t * (3.0f - 2.0f * t)
+            }
+        }
+
         /**
-         * Actualiza la máquina de estados de transición de forma determinista y fluida.
+         * Actualiza la máquina de estados de transición de forma determinista y consistente.
          */
         fun updateTransitionProgress(): Float {
             if (currentPhase == TransitionPhase.IDLE) {
@@ -121,10 +134,11 @@ class MirrorWorldClient : ClientModInitializer {
                 }
                 TransitionPhase.HOLDING -> {
                     val reachedTarget = currentLevel != null && originDimension != null && currentLevel.dimension() != originDimension
-                    val timeout = elapsed >= (holdDurationMs + 2000L)
                     val loadingScreenActive = client.screen != null && client.screen !is net.minecraft.client.gui.screens.ChatScreen
+                    val softReady = !loadingScreenActive && ((reachedTarget && elapsed >= 150L) || elapsed >= holdDurationMs.toLong() + 900L)
+                    val hardTimeout = elapsed >= 2200L
 
-                    if (elapsed >= holdDurationMs && (reachedTarget || timeout) && !loadingScreenActive) {
+                    if (softReady || hardTimeout) {
                         currentPhase = TransitionPhase.OUTBOUND
                         phaseStartMillis = now
                         currentProgress = 0.5f
@@ -154,18 +168,15 @@ class MirrorWorldClient : ClientModInitializer {
          */
         fun renderTransitionOverlay(guiGraphics: GuiGraphics) {
             val p = getTransitionProgress()
-            if (p <= 0.0f || p >= 1.0f) return
-
-            val intensity = sin(p.toDouble() * Math.PI).toFloat()
+            val intensity = computeFadeIntensity(p)
             if (intensity <= 0.001f) return
 
             val width = guiGraphics.guiWidth()
             val height = guiGraphics.guiHeight()
 
             // 1. Velo de luz pura perlada / lavanda suave
-            val veilFactor = Math.pow(intensity.toDouble(), 1.7).toFloat()
-            if (veilFactor > 0.005f) {
-                val veilAlpha = (veilFactor * 255).toInt().coerceIn(0, 255)
+            val veilAlpha = (intensity * 255).toInt().coerceIn(0, 255)
+            if (veilAlpha > 1) {
                 val veilColor = (veilAlpha shl 24) or 0xF6F1FA
                 guiGraphics.fill(0, 0, width, height, veilColor)
             }
@@ -186,7 +197,8 @@ class MirrorWorldClient : ClientModInitializer {
         fun renderTopLevelTransition() {
             if (!isTransitionActive()) return
             val p = getTransitionProgress()
-            if (p <= 0.0f || p >= 1.0f) return
+            val intensity = computeFadeIntensity(p)
+            if (intensity <= 0.001f) return
 
             val client = Minecraft.getInstance()
             val window = client.window ?: return
@@ -205,26 +217,22 @@ class MirrorWorldClient : ClientModInitializer {
             RenderSystem.depthMask(false)
             RenderSystem.disableCull()
 
-            val intensity = sin(p.toDouble() * Math.PI).toFloat()
-            if (intensity > 0.001f) {
-                val veilFactor = Math.pow(intensity.toDouble(), 1.7).toFloat()
-                if (veilFactor > 0.005f) {
-                    val veilAlpha = (veilFactor * 255).toInt().coerceIn(0, 255)
-                    val a = veilAlpha / 255.0f
-                    val r = 0xF6 / 255.0f
-                    val g = 0xF1 / 255.0f
-                    val b = 0xFA / 255.0f
+            val veilAlpha = (intensity * 255).toInt().coerceIn(0, 255)
+            if (veilAlpha > 1) {
+                val a = veilAlpha / 255.0f
+                val r = 0xF6 / 255.0f
+                val g = 0xF1 / 255.0f
+                val b = 0xFA / 255.0f
 
-                    RenderSystem.setShader(GameRenderer::getPositionColorShader)
-                    val tessellator = Tesselator.getInstance()
-                    val buf = tessellator.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR)
-                    val m = Matrix4f()
-                    buf.addVertex(m, 0f, height, 0f).setColor(r, g, b, a)
-                    buf.addVertex(m, width, height, 0f).setColor(r, g, b, a)
-                    buf.addVertex(m, width, 0f, 0f).setColor(r, g, b, a)
-                    buf.addVertex(m, 0f, 0f, 0f).setColor(r, g, b, a)
-                    buf.build()?.let { BufferUploader.drawWithShader(it) }
-                }
+                RenderSystem.setShader(GameRenderer::getPositionColorShader)
+                val tessellator = Tesselator.getInstance()
+                val buf = tessellator.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR)
+                val m = Matrix4f()
+                buf.addVertex(m, 0f, height, 0f).setColor(r, g, b, a)
+                buf.addVertex(m, width, height, 0f).setColor(r, g, b, a)
+                buf.addVertex(m, width, 0f, 0f).setColor(r, g, b, a)
+                buf.addVertex(m, 0f, 0f, 0f).setColor(r, g, b, a)
+                buf.build()?.let { BufferUploader.drawWithShader(it) }
             }
 
             RenderSystem.enableCull()
@@ -263,7 +271,14 @@ class MirrorWorldClient : ClientModInitializer {
         ClientPlayConnectionEvents.DISCONNECT.register { _, _ ->
             currentPhase = TransitionPhase.IDLE
             currentProgress = 0.0f
+            entityOrigins.clear()
             pokemonTrails.clear()
+        }
+
+        ClientPlayNetworking.registerGlobalReceiver(MirrorOriginsPayload.TYPE) { payload, context ->
+            context.client().execute {
+                entityOrigins.putAll(payload.origins)
+            }
         }
 
         // 3. Receptor del paquete de transición
@@ -278,7 +293,13 @@ class MirrorWorldClient : ClientModInitializer {
         WorldRenderEvents.START.register { _ ->
             val client = Minecraft.getInstance()
             updateTransitionProgress()
-            if (isTransitionActive() || MirrorRules.isMirror(client.level) || MirrorRules.isRecuerdos(client.level)) {
+            val insideSpecialDim = MirrorRules.isMirror(client.level) || MirrorRules.isRecuerdos(client.level)
+            if (!insideSpecialDim) {
+                wasInsideMirror = false
+                lastNearbyEntity = null
+                nearbyMemoryAlpha = 0.0f
+            }
+            if (isTransitionActive() || insideSpecialDim) {
                 ensureShaderActive(client)
             }
             updateFlashbackShader(client)
@@ -315,6 +336,16 @@ class MirrorWorldClient : ClientModInitializer {
     private var mirrorEnterTimeMs = 0L
     private var nearbyMemoryAlpha = 0.0f
     private var lastNearbyEntity: PokemonEntity? = null
+    private var lastTargetLockMs = 0L
+
+    private fun normalizeSeasonOrigin(raw: String?): String? {
+        if (raw.isNullOrBlank()) return null
+        return when {
+            raw.contains("2") -> "Desgraciamon 2"
+            raw.contains("1") -> "Desgraciamon 1"
+            else -> raw
+        }
+    }
 
     private fun renderMirrorTitleHud(graphics: GuiGraphics) {
         val client = Minecraft.getInstance()
@@ -327,7 +358,7 @@ class MirrorWorldClient : ClientModInitializer {
         if (!wasInsideMirror && isInside) {
             mirrorEnterTimeMs = System.currentTimeMillis()
             if (currentPhase == TransitionPhase.IDLE) {
-                triggerOutboundDissolve(2200)
+                triggerOutboundDissolve(950)
             }
         }
         wasInsideMirror = isInside
@@ -386,32 +417,78 @@ class MirrorWorldClient : ClientModInitializer {
         val player = client.player ?: return
         val level = client.level ?: return
 
+        val eyePos = player.eyePosition
+        val lookVec = player.lookAngle.normalize()
+        val rayEnd = eyePos.add(lookVec.scale(6.5))
         val box = player.boundingBox.inflate(6.0)
-        val entities = level.getEntitiesOfClass(PokemonEntity::class.java, box)
-        val nearest = entities.filter {
-            MirrorRules.MEMORY_TAG in it.tags || MirrorRules.isRecuerdos(level) || MirrorRules.isMirror(level)
-        }.filter {
-            val lookVec = player.lookAngle.normalize()
-            val toEntity = it.position().add(0.0, it.bbHeight * 0.5, 0.0).subtract(player.eyePosition).normalize()
-            val dot = lookVec.dot(toEntity)
-            player.distanceTo(it) <= 5.5 && dot > 0.82
-        }.minByOrNull { it.distanceToSqr(player) }
+        val candidates = level.getEntitiesOfClass(PokemonEntity::class.java, box).filter {
+            it.isAlive && !it.isRemoved && (MirrorRules.MEMORY_TAG in it.tags || MirrorRules.isRecuerdos(level) || MirrorRules.isMirror(level))
+        }
 
-        val targetAlpha = if (nearest != null) 1.0f else 0.0f
-        val step = 0.12f
+        // Priorizar impacto directo del rayo de mira para evitar ambigüedad cuando hay un Pokémon detrás de otro
+        val directHit = candidates.mapNotNull { entity ->
+            val hit = entity.boundingBox.inflate(0.22).clip(eyePos, rayEnd)
+            if (hit.isPresent) entity to eyePos.distanceToSqr(hit.get()) else null
+        }.minByOrNull { it.second }?.first
+
+        val coneTarget = if (directHit == null) {
+            candidates.mapNotNull { entity ->
+                val dist = player.distanceTo(entity).toDouble()
+                if (dist > 5.5) return@mapNotNull null
+                val toEntity = entity.position().add(0.0, entity.bbHeight * 0.5, 0.0).subtract(eyePos).normalize()
+                val dot = lookVec.dot(toEntity)
+                if (dot <= 0.88) return@mapNotNull null
+                entity to (dot - dist * 0.025)
+            }.maxByOrNull { it.second }?.first
+        } else null
+
+        val bestCandidate = directHit ?: coneTarget
+        val now = System.currentTimeMillis()
+        val currentLocked = lastNearbyEntity?.takeIf { locked ->
+            if (!locked.isAlive || locked.isRemoved) return@takeIf false
+            val dist = player.distanceTo(locked)
+            if (dist > 6.0f) return@takeIf false
+            val toLocked = locked.position().add(0.0, locked.bbHeight * 0.5, 0.0).subtract(eyePos).normalize()
+            lookVec.dot(toLocked) > 0.84
+        }
+
+        val nearest = when {
+            bestCandidate == null -> null
+            currentLocked == null || bestCandidate.id == currentLocked.id -> {
+                if (lastNearbyEntity?.id != bestCandidate.id) lastTargetLockMs = now
+                bestCandidate
+            }
+            directHit != null && directHit.id != currentLocked.id -> {
+                lastTargetLockMs = now
+                directHit
+            }
+            now - lastTargetLockMs >= 160L -> {
+                lastTargetLockMs = now
+                bestCandidate
+            }
+            else -> currentLocked
+        }
+
+        if (nearest != null) {
+            lastNearbyEntity = nearest
+        } else if (nearbyMemoryAlpha <= 0.02f) {
+            lastNearbyEntity = null
+        }
+
+        val entity = lastNearbyEntity
+        val originServer = normalizeSeasonOrigin(entity?.let { entityOrigins[it.id] })
+        val hasValidTarget = nearest != null && originServer != null
+
+        val targetAlpha = if (hasValidTarget) 1.0f else 0.0f
+        val step = 0.14f
         nearbyMemoryAlpha = if (nearbyMemoryAlpha < targetAlpha) {
             (nearbyMemoryAlpha + step).coerceAtMost(1.0f)
         } else {
             (nearbyMemoryAlpha - step).coerceAtLeast(0.0f)
         }
 
-        if (nearest != null) {
-            lastNearbyEntity = nearest
-        }
+        if (nearbyMemoryAlpha <= 0.01f || entity == null || originServer == null) return
 
-        if (nearbyMemoryAlpha <= 0.01f || lastNearbyEntity == null) return
-
-        val entity = lastNearbyEntity ?: return
         val pokemon = entity.pokemon
         val alphaByte = (nearbyMemoryAlpha * 255).toInt().coerceIn(0, 255)
         if (alphaByte <= 2) return
@@ -420,14 +497,18 @@ class MirrorWorldClient : ClientModInitializer {
         val screenH = graphics.guiHeight()
         val font = client.font
 
-        val cardW = 180
-        val cardH = 50
-        val cardX = (screenW - cardW) / 2
-        val cardY = (screenH / 2) + 24
+        val cardW = 190
+        val cardH = 52
+        // Centrada verticalmente y ubicada horizontalmente a mitad camino entre el centro y el borde derecho (75%)
+        val cardX = ((screenW * 0.75f) - (cardW / 2.0f)).toInt().coerceIn(8, (screenW - cardW - 8).coerceAtLeast(8))
+        val cardY = (screenH - cardH) / 2
 
         val bg = (alphaByte.coerceAtMost(220) shl 24) or 0x0D0B14
         val border = (alphaByte shl 24) or 0x8B5CF6
         val glow = (alphaByte.coerceAtMost(90) shl 24) or 0xC084FC
+
+        graphics.pose().pushPose()
+        graphics.pose().translate(0f, 0f, 200f)
 
         graphics.fill(cardX - 1, cardY - 1, cardX + cardW + 1, cardY + cardH + 1, glow)
         graphics.fill(cardX, cardY, cardX + cardW, cardY + cardH, bg)
@@ -449,8 +530,10 @@ class MirrorWorldClient : ClientModInitializer {
         val nameText = "§f$dispName$shinyTag §7(Nv. §b${pokemon.level}§7)"
         graphics.drawCenteredString(font, nameText, cardX + cardW / 2, cardY + 20, (alphaByte shl 24) or 0xFFFFFF)
 
-        val hintText = "§d[Clic Derecho] §7para revivir su grito"
-        graphics.drawCenteredString(font, hintText, cardX + cardW / 2, cardY + 34, (alphaByte shl 24) or 0xC4B5FD)
+        val originText = "§7Origen: §b$originServer"
+        graphics.drawCenteredString(font, originText, cardX + cardW / 2, cardY + 34, (alphaByte shl 24) or 0xC4B5FD)
+
+        graphics.pose().popPose()
     }
 
     private fun preloadShader(client: Minecraft) {
@@ -660,7 +743,7 @@ class MirrorWorldClient : ClientModInitializer {
             } else if (current != null) {
                 val chainAccessor = current as? PostChainAccessor
                 if (chainAccessor != null) {
-                    val timeSec = (System.currentTimeMillis() % 100_000_000L) / 1000.0f
+                    val timeSec = (System.currentTimeMillis() - clientStartMillis) / 1000.0f
                     val blurActive = if (MirrorClientSettings.isMotionBlurEnabled()) 1.0f else 0.0f
                     val swirlProgress = getTransitionProgress()
                     val swirlActive = if (inTransition) 1.0f else 0.0f

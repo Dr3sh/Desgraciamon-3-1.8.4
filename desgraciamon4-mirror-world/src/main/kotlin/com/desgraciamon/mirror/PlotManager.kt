@@ -95,7 +95,7 @@ object PlotManager {
     }
 
     fun ownerOf(index: Int): UUID? =
-        data.plots.entries.firstOrNull { it.value == index || (it.value <= index && index < it.value + 15) }?.key?.let { runCatching { UUID.fromString(it) }.getOrNull() }
+        data.plots.entries.firstOrNull { it.value == index }?.key?.let { runCatching { UUID.fromString(it) }.getOrNull() }
 
     fun isGenerated(index: Int) = index in data.generated
 

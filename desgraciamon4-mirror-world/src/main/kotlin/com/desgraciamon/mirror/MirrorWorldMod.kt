@@ -41,18 +41,18 @@ class MirrorWorldMod : ModInitializer {
         private val scheduledTransitions = ConcurrentHashMap<UUID, ScheduledTransition>()
 
         /**
-         * Inicia un Black Fade en el cliente (~4s total) y ejecuta [onBlackScreen]
-         * justo cuando la pantalla alcanza el 100% negro.
+         * Inicia un Black Fade consistente (~2.05s total) y ejecuta [onBlackScreen]
+         * justo cuando la pantalla alcanza el 100% del velo.
          */
         fun startBlackFadeTransition(player: ServerPlayer, onBlackScreen: (ServerPlayer) -> Unit) {
-            val totalMs = (MirrorSettings.config.fadeTotalSeconds.coerceIn(1.5, 10.0) * 1000.0).toInt()
-            val holdMs = 450
-            val fadeInMs = ((totalMs - holdMs) / 2).coerceAtLeast(600)
-            val fadeOutMs = ((totalMs - holdMs) - fadeInMs).coerceAtLeast(600)
+            val totalMs = (MirrorSettings.config.fadeTotalSeconds.coerceIn(1.6, 2.5) * 1000.0).toInt()
+            val holdMs = 250
+            val fadeInMs = ((totalMs - holdMs) / 2).coerceAtLeast(650)
+            val fadeOutMs = ((totalMs - holdMs) - fadeInMs).coerceAtLeast(650)
 
             MirrorPackets.send(player, fadeInMs = fadeInMs, holdMs = holdMs, fadeOutMs = fadeOutMs)
 
-            val ticksUntilBlack = (fadeInMs / 50).coerceAtLeast(1)
+            val ticksUntilBlack = ((fadeInMs + holdMs / 2) / 50).coerceAtLeast(1)
             scheduledTransitions[player.uuid] = ScheduledTransition(
                 playerUuid = player.uuid,
                 ticksRemaining = ticksUntilBlack,
@@ -70,6 +70,7 @@ class MirrorWorldMod : ModInitializer {
         )
 
         MirrorSettings.load()
+        PlayerLinksConfig.load()
         MirrorPackets.registerCommon()
         seedExampleMemoriesIfEmpty()
         MirrorRules.registerEvents()
@@ -150,6 +151,18 @@ class MirrorWorldMod : ModInitializer {
     }
 
     private fun registerCommands(dispatcher: CommandDispatcher<CommandSourceStack>) {
+        dispatcher.register(
+            Commands.literal("recuerdos").executes { ctx ->
+                teleportToRecuerdosDimension(ctx.source.playerOrException)
+                1
+            }
+        )
+        dispatcher.register(
+            Commands.literal("dimension_recuerdos").executes { ctx ->
+                teleportToRecuerdosDimension(ctx.source.playerOrException)
+                1
+            }
+        )
         dispatcher.register(
             Commands.literal("espejo")
                 .executes { ctx ->
@@ -257,6 +270,7 @@ class MirrorWorldMod : ModInitializer {
                     )
                     .then(Commands.literal("recargar").executes { ctx ->
                         MirrorSettings.load()
+                        PlayerLinksConfig.load()
                         seedExampleMemoriesIfEmpty()
                         MemoryLoader.clearCache()
                         val mirrorLevel = ctx.source.server.getLevel(MirrorRules.DIMENSION_KEY)
@@ -301,27 +315,32 @@ class MirrorWorldMod : ModInitializer {
         }
 
         PlotManager.saveReturnPoint(player)
-        player.sendSystemMessage(Component.literal("§6§eIniciando tránsito a la §6Dimensión de los Recuerdos§e..."))
+        player.sendSystemMessage(MirrorSettings.text("recuerdos.entering"))
 
         startBlackFadeTransition(player) { p ->
             val surfaceY = recuerdosLevel.getHeight(net.minecraft.world.level.levelgen.Heightmap.Types.MOTION_BLOCKING, 0, 0).toDouble().coerceAtLeast(70.0) + 1.0
             p.teleportTo(recuerdosLevel, 0.5, surfaceY, 0.5, 0f, 0f)
-            p.sendSystemMessage(Component.literal("§6Has llegado a la §eDimensión de los Recuerdos§6."))
+            p.sendSystemMessage(MirrorSettings.text("recuerdos.arrived"))
         }
     }
 
     private fun exitRecuerdosDimension(player: ServerPlayer) {
         if (!MirrorRules.isRecuerdos(player.serverLevel())) {
-            player.sendSystemMessage(Component.literal("§c[!] No te encuentras dentro de dimension_recuerdos."))
+            player.sendSystemMessage(MirrorSettings.text("recuerdos.not_inside"))
             return
         }
         startBlackFadeTransition(player) { p ->
             PlotManager.sendBack(p)
-            p.sendSystemMessage(Component.literal("§aHas regresado de la Dimensión de los Recuerdos."))
+            p.sendSystemMessage(MirrorSettings.text("recuerdos.exited"))
         }
     }
 
     private fun enterOwnMirror(player: ServerPlayer) {
+        val discordId = DiscordBridgeHook.getDiscordId(player.server, player.uuid)
+        if (discordId.isNullOrBlank()) {
+            player.sendSystemMessage(MirrorSettings.text("enter.discord_required"))
+            return
+        }
         teleportToOwnerMirrorWithFade(player, player.uuid, player.scoreboardName, isOwner = true)
     }
 
@@ -338,12 +357,13 @@ class MirrorWorldMod : ModInitializer {
         startBlackFadeTransition(traveler) { currentTraveler ->
             val server: MinecraftServer = currentTraveler.server
             val mirrorLevel = server.getLevel(MirrorRules.DIMENSION_KEY) ?: return@startBlackFadeTransition
-            val memories = MemoryLoader.get(ownerUuid)
+            val memories = MemoryLoader.get(ownerUuid, server)
 
             val index = if (isOwner) PlotManager.nextThemeIndex(ownerUuid) else PlotManager.currentPlotFor(ownerUuid)
             MirrorRules.ensurePlotReady(mirrorLevel, ownerUuid, forceRegenerate = false, explicitIndex = index)
             val spawn = TerrainGenerator.spawnPoint(mirrorLevel, index)
             currentTraveler.teleportTo(mirrorLevel, spawn.x, spawn.y, spawn.z, 0f, 0f)
+            MirrorRules.syncPlotOriginsToPlayer(currentTraveler, index)
 
             val theme = TerrainGenerator.themeFor(index)
 
@@ -493,7 +513,7 @@ class MirrorWorldMod : ModInitializer {
     }
 
     private fun showMemoriesList(source: CommandSourceStack, ownerUuid: UUID, ownerName: String) {
-        val memories = MemoryLoader.get(ownerUuid)
+        val memories = MemoryLoader.get(ownerUuid, source.server)
         source.sendSuccess(
             {
                 MirrorSettings.text(

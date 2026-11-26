@@ -60,6 +60,29 @@ object VideoPlayerManager {
     }
 
     /**
+     * Lightweight prewarm during LoadingOverlay: only loads the static PNG/JPG fallback frame
+     * without starting software FFmpeg video decoding while mods and resource packs are loading.
+     */
+    @Synchronized
+    fun prewarmStaticOnly() {
+        if (hasCustomImageTexture || isInWorld() || isPrewarming) {
+            return
+        }
+        val load = {
+            try {
+                reloadCustomImageTexture()
+            } catch (t: Throwable) {
+                System.err.println("[DesgraciamonVideoMenu] Error prewarming static frame: ${t.message}")
+            }
+        }
+        if (RenderSystem.isOnRenderThread()) {
+            load()
+        } else {
+            RenderSystem.recordRenderCall { load() }
+        }
+    }
+
+    /**
      * Prewarm static frame and video player so they are already resident in memory and decoding.
      */
     @JvmOverloads

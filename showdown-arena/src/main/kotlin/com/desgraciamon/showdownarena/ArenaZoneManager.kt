@@ -1,8 +1,10 @@
 package com.desgraciamon.showdownarena
 
+import com.cobblemon.mod.common.entity.pokemon.PokemonEntity
 import com.google.gson.GsonBuilder
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking
+import net.minecraft.core.particles.ParticleTypes
 import net.minecraft.network.FriendlyByteBuf
 import net.minecraft.network.codec.StreamCodec
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload
@@ -11,6 +13,7 @@ import net.minecraft.server.MinecraftServer
 import net.minecraft.server.level.ServerPlayer
 import net.minecraft.world.entity.Entity
 import net.minecraft.world.level.storage.LevelResource
+import net.minecraft.world.phys.AABB
 import java.io.File
 
 data class ArenaZone(
@@ -252,6 +255,56 @@ object ArenaZoneManager {
     fun syncToAll(server: net.minecraft.server.MinecraftServer) {
         val payload = createPayload()
         server.playerList.players.forEach { ServerPlayNetworking.send(it, payload) }
+    }
+
+    private var wildCleanupTick = 0
+
+    /**
+     * Devuelve true SOLO si es un Pokémon salvaje común:
+     * excluye estrictamente Pokémon de jugadores, en combate, temporales de Showdown,
+     * recuerdos, con nombre/persistencia, shinies, legendarios y míticos.
+     */
+    fun isCommonWildPokemon(entity: PokemonEntity): Boolean {
+        if (!entity.isAlive || entity.isRemoved) return false
+        if (entity.ownerUUID != null) return false
+        val pkm = entity.pokemon
+        if (pkm.isPlayerOwned() || pkm.getOwnerUUID() != null) return false
+        if (pkm.storeCoordinates.get() != null) return false
+        if (entity.isBattling || entity.battleId != null) return false
+        if (pkm.persistentData.getBoolean(ArenaTeamFactory.SHOWDOWN_TEMP_NBT_KEY)) return false
+        if (entity.isPersistenceRequired || entity.hasCustomName()) return false
+        if ("desgraciamon4_mirror_memory" in entity.tags) return false
+        if (pkm.shiny) return false
+        if (pkm.isLegendary() || pkm.isMythical()) return false
+        return true
+    }
+
+    fun tickWildCleanup(server: MinecraftServer) {
+        wildCleanupTick++
+        if (wildCleanupTick % 20 != 0) return
+        if (!config.enabled) return
+        val z = config.zone ?: return
+        val level = server.allLevels.firstOrNull { it.dimension().location().toString() == z.dimension } ?: return
+
+        val box = AABB(
+            minOf(z.minX, z.maxX) - 1.0,
+            z.minY - 5.0,
+            minOf(z.minZ, z.maxZ) - 1.0,
+            maxOf(z.minX, z.maxX) + 1.0,
+            z.minY + 24.0,
+            maxOf(z.minZ, z.maxZ) + 1.0
+        )
+
+        for (entity in level.getEntitiesOfClass(PokemonEntity::class.java, box)) {
+            if (z.contains(entity) && isCommonWildPokemon(entity)) {
+                level.sendParticles(
+                    ParticleTypes.CLOUD,
+                    entity.x, entity.y + entity.bbHeight * 0.5, entity.z,
+                    6, 0.25, 0.25, 0.25, 0.02
+                )
+                entity.discard()
+            }
+        }
     }
 }
 

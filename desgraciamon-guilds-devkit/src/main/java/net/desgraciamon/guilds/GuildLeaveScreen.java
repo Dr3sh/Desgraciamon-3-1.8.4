@@ -134,9 +134,9 @@ final class GuildLeaveScreen extends Screen {
          graphics.pose().translate(-cx, -cy, 0.0F);
       }
 
-      graphics.fill(this.dialogX, this.dialogY, this.dialogX + this.dialogWidth, this.dialogY + this.dialogHeight, -15130334);
+      graphics.fill(this.dialogX, this.dialogY, this.dialogX + this.dialogWidth, this.dialogY + this.dialogHeight, GuildScreen.tintSurface(0x191F22, 0.22F, 0xFF));
       graphics.fill(this.dialogX, this.dialogY, this.dialogX + this.dialogWidth, this.dialogY + 2, -1876643);
-      this.drawOutline(graphics, this.dialogX, this.dialogY, this.dialogWidth, this.dialogHeight, -13286331);
+      this.drawOutline(graphics, this.dialogX, this.dialogY, this.dialogWidth, this.dialogHeight, GuildScreen.tintSurface(0x354445, 0.38F, 0xFF));
       graphics.drawCenteredString(this.font, "¿Seguro que quieres salir del gremio?", this.dialogX + this.dialogWidth / 2, this.dialogY + 16, -986127);
       if (this.isLeader) {
          if (this.candidates.isEmpty()) {
@@ -179,13 +179,17 @@ final class GuildLeaveScreen extends Screen {
 
       protected void renderWidget(GuiGraphics graphics, int mouseX, int mouseY, float delta) {
          boolean selected = this.candidate.equals(GuildLeaveScreen.this.selectedSuccessor);
-         int bg = selected ? -13807798 : (this.isHovered() ? -14405582 : -14998748);
-         int border = selected ? -10764121 : (this.isHovered() ? -12626858 : -13944260);
+         int bg = selected
+            ? GuildScreen.accentSurface()
+            : (this.isHovered() ? GuildScreen.tintSurface(0x242F32, 0.30F, 0xFF) : GuildScreen.tintSurface(0x1B2424, 0.22F, 0xFF));
+         int border = selected
+            ? GuildScreen.accentColor()
+            : (this.isHovered() ? GuildScreen.tintSurface(0x3F4F56, 0.42F, 0xFF) : GuildScreen.tintSurface(0x2B383C, 0.34F, 0xFF));
          graphics.fill(this.getX(), this.getY(), this.getX() + this.width, this.getY() + this.height, bg);
          GuildLeaveScreen.this.drawOutline(graphics, this.getX(), this.getY(), this.width, this.height, border);
          graphics.drawString(GuildLeaveScreen.this.font, this.candidate, this.getX() + 8, this.getY() + (this.height - 8) / 2, selected ? -1 : -3352620, false);
          if (selected) {
-            graphics.drawString(GuildLeaveScreen.this.font, "[OK]", this.getX() + this.width - 16, this.getY() + (this.height - 8) / 2, -10764121, false);
+            graphics.drawString(GuildLeaveScreen.this.font, "[OK]", this.getX() + this.width - 16, this.getY() + (this.height - 8) / 2, GuildScreen.accentColor(), false);
          }
       }
 
@@ -213,8 +217,12 @@ final class GuildLeaveScreen extends Screen {
       }
 
       protected void renderWidget(GuiGraphics graphics, int mouseX, int mouseY, float delta) {
-         int bg = this.primary ? (this.isHovered() ? -3585462 : -6081227) : (this.isHovered() ? -13483709 : -14537683);
-         int border = this.primary ? -1876643 : (this.isHovered() ? -11311255 : -13286331);
+         int bg = this.primary
+            ? (this.isHovered() ? -3585462 : -6081227)
+            : (this.isHovered() ? GuildScreen.tintSurface(0x324043, 0.34F, 0xFF) : GuildScreen.tintSurface(0x222D2D, 0.26F, 0xFF));
+         int border = this.primary
+            ? -1876643
+            : (this.isHovered() ? GuildScreen.accentColor() : GuildScreen.tintSurface(0x354445, 0.38F, 0xFF));
          graphics.fill(this.getX(), this.getY(), this.getX() + this.width, this.getY() + this.height, bg);
          GuildLeaveScreen.this.drawOutline(graphics, this.getX(), this.getY(), this.width, this.height, border);
          graphics.drawCenteredString(GuildLeaveScreen.this.font, this.getMessage(), this.getX() + this.width / 2, this.getY() + (this.height - 8) / 2, -1);

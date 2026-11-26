@@ -252,6 +252,7 @@ public final class DesgraciamonGuilds implements ModInitializer {
    }
 
    public void onInitialize() {
+      GuildTextCatalog.load();
       GuildNetwork.initialize(() -> storage);
       GuildSynergyManager.initialize();
       RadicalTrainerBattleManager.initialize();

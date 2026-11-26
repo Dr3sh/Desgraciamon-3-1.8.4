@@ -57,13 +57,24 @@ class CustomNamesMod : ModInitializer {
 
         @JvmStatic
         fun getTabListDisplayName(player: ServerPlayer): Component {
-            val nameComp = CustomNamesManager.getComponent(player.uuid)
+            val baseComp = CustomNamesManager.getComponent(player.uuid)
                 ?: Component.literal(player.gameProfile.name)
+            val hexColor = CustomNamesManager.getTabColor(player.uuid)
+            val coloredComp = if (hexColor != null) {
+                val parsedColor = net.minecraft.network.chat.TextColor.parseColor(hexColor).result().orElse(null)
+                if (parsedColor != null) {
+                    baseComp.copy().withStyle { it.withColor(parsedColor) }
+                } else {
+                    baseComp
+                }
+            } else {
+                baseComp
+            }
 
             return if (player.team != null) {
-                PlayerTeam.formatNameForTeam(player.team, nameComp)
+                PlayerTeam.formatNameForTeam(player.team, coloredComp)
             } else {
-                nameComp
+                coloredComp
             }
         }
     }

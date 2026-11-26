@@ -44,6 +44,9 @@ class DiscordLinkData private constructor() : SavedData() {
     }
 
     @Synchronized
+    fun isPlayerLinked(playerId: UUID): Boolean = links.containsKey(playerId)
+
+    @Synchronized
     fun link(code: String, discordId: String, now: Long = System.currentTimeMillis()): Pair<LinkResult, String?> {
         prune(now)
         val candidate = pending.remove(hash(code.uppercase().trim())) ?: run {
@@ -54,7 +57,10 @@ class DiscordLinkData private constructor() : SavedData() {
             setDirty()
             return LinkResult.DISCORD_ALREADY_LINKED to candidate.playerName
         }
-        links.remove(candidate.playerId)
+        if (links.containsKey(candidate.playerId)) {
+            setDirty()
+            return LinkResult.MINECRAFT_ALREADY_LINKED to candidate.playerName
+        }
         links[candidate.playerId] = Link(discordId, candidate.playerName)
         setDirty()
         return LinkResult.LINKED to candidate.playerName
@@ -69,6 +75,22 @@ class DiscordLinkData private constructor() : SavedData() {
         links.remove(linkedPlayer.key)
         setDirty()
         return linkedPlayer.value.minecraftName
+    }
+
+    @Synchronized
+    fun unlinkByNameOrId(query: String): Pair<UUID, String>? {
+        val clean = query.trim()
+        if (clean.isEmpty()) return null
+        val parsedUuid = runCatching { UUID.fromString(clean) }.getOrNull()
+        val entry = when {
+            parsedUuid != null && links.containsKey(parsedUuid) -> parsedUuid to links[parsedUuid]!!
+            else -> links.entries.firstOrNull {
+                it.value.minecraftName.equals(clean, ignoreCase = true) || it.value.discordId == clean
+            }?.let { it.key to it.value }
+        } ?: return null
+        links.remove(entry.first)
+        setDirty()
+        return entry.first to entry.second.minecraftName
     }
 
     @Synchronized
@@ -321,4 +343,4 @@ class DiscordLinkData private constructor() : SavedData() {
     }
 }
 
-enum class LinkResult { LINKED, INVALID_OR_EXPIRED, DISCORD_ALREADY_LINKED }
+enum class LinkResult { LINKED, INVALID_OR_EXPIRED, DISCORD_ALREADY_LINKED, MINECRAFT_ALREADY_LINKED }

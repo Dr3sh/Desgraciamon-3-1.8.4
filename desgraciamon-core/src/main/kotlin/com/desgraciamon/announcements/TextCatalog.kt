@@ -13,7 +13,14 @@ object TextCatalog {
     private val gson = GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create()
     private val logger = LoggerFactory.getLogger("desgraciamon4-announcements")
     private var defaults: Map<String, String> = mapOf(
-        "daily.unlocked" to "<color={color}>¡Nueva misión diaria disponible! Pulsa [{key}] para verla.</color>"
+        "daily.unlocked" to "<color=#38BDF8>Hay una nueva misión diaria, revísala con la tecla [{key}]</color>",
+        "mission.new_online_notice" to "<color=#B91C3C>Hay una nueva misión, revísala con la tecla [{key}]</color>",
+        "join.new_both" to "<color=#F59E0B>[Desgraciamon]</color> <color=#FDE047>Hay </color><color=#FFFFFF>{announcements}</color><color=#FDE047> anuncios y </color><color=#FFFFFF>{missions}</color><color=#FDE047> misiones nuevas. ¡Revisa con la tecla </color>[{key}]<color=#FDE047>!</color>",
+        "join.new_announcements" to "<color=#F59E0B>[Desgraciamon]</color> <color=#FDE047>Hay </color><color=#FFFFFF>{announcements}</color><color=#FDE047> anuncios nuevos. ¡Revisa con la tecla </color>[{key}]<color=#FDE047>!</color>",
+        "join.new_missions" to "<color=#F59E0B>[Desgraciamon]</color> <color=#FDE047>Hay </color><color=#FFFFFF>{missions}</color><color=#FDE047> misiones nuevas. ¡Revisa con la tecla </color>[{key}]<color=#FDE047>!</color>",
+        "mission.chat_header" to "<color=#B91C3C>{prefix}</color> <color=#FFFFFF>{title}</color>",
+        "mission.objective_progress" to "<color=#55FF55>{tag}</color> <color=#FFFFFF>{title}</color> <color=#AAAAAA>-</color> <color=#FFFF55>{label}:</color> <color=#55FFFF>{current}/{max}</color>",
+        "mission.objective_completed" to "<color=#55FF55>{tag}</color> <color=#FFFFFF>{title}</color> <color=#AAAAAA>-</color> <color=#55FF55>¡Objetivo completado! ({completed}/{total} objetivos)</color>"
     )
     private var texts: Map<String, String> = defaults
 
@@ -85,9 +92,24 @@ object TextCatalog {
     ): MutableComponent {
         val safeHex = normalizeHexColor(colorHex, "#38BDF8")
         val rgb = parseRgb(safeHex)
-        val keyComp = Component.keybind(keybindId).withStyle(Style.EMPTY.withColor(TextColor.fromRgb(rgb)))
-        val template = raw("daily.unlocked").replace("{color}", safeHex)
-        return RichText.parse(template, mapOf("key" to keyComp))
+        val keyComp = Component.keybind(keybindId).withStyle(Style.EMPTY.withColor(TextColor.fromRgb(rgb)).withBold(true))
+        return Component.literal("Hay una nueva misión diaria, revísala con la tecla [")
+            .withStyle(Style.EMPTY.withColor(TextColor.fromRgb(rgb)))
+            .append(keyComp)
+            .append(Component.literal("]").withStyle(Style.EMPTY.withColor(TextColor.fromRgb(rgb))))
+    }
+
+    fun missionPublishedComponent(
+        colorHex: String = "#B91C3C",
+        keybindId: String = "key.desgraciamon4_announcements.open"
+    ): MutableComponent {
+        val safeHex = normalizeHexColor(colorHex, "#B91C3C")
+        val rgb = parseRgb(safeHex)
+        val keyComp = Component.keybind(keybindId).withStyle(Style.EMPTY.withColor(TextColor.fromRgb(rgb)).withBold(true))
+        return Component.literal("Hay una nueva misión, revísala con la tecla [")
+            .withStyle(Style.EMPTY.withColor(TextColor.fromRgb(rgb)))
+            .append(keyComp)
+            .append(Component.literal("]").withStyle(Style.EMPTY.withColor(TextColor.fromRgb(rgb))))
     }
 
     fun sanitizeText(value: String): String {

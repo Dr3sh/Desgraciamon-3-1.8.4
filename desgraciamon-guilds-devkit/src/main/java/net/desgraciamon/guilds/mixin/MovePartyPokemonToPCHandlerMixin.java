@@ -9,7 +9,7 @@ import com.cobblemon.mod.common.net.messages.server.storage.pc.MovePartyPokemonT
 import com.cobblemon.mod.common.net.serverhandling.storage.pc.MovePartyPokemonToPCHandler;
 import com.cobblemon.mod.common.pokemon.Pokemon;
 import net.desgraciamon.guilds.DesgraciamonGuilds;
-import net.minecraft.network.chat.Component;
+import net.desgraciamon.guilds.GuildTextCatalog;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import org.spongepowered.asm.mixin.Mixin;
@@ -31,7 +31,7 @@ abstract class MovePartyPokemonToPCHandlerMixin {
          Pokemon pokemon = party.get(packet.getPartyPosition());
          if (pokemon != null && DesgraciamonGuilds.isRestrictedPokemon(pokemon)) {
             new ClosePCPacket(pc.getUuid()).sendToPlayer(player);
-            player.sendSystemMessage(Component.literal("§c[Gremio] No puedes almacenar Pokémon Legendarios ni Míticos en el PC compartido."));
+            player.sendSystemMessage(GuildTextCatalog.component("guild.pc.no_legendary"));
             callback.cancel();
          } else if (pokemon != null) {
             pokemon.getPersistentData().putString("guild_depositor_name", player.getGameProfile().getName());

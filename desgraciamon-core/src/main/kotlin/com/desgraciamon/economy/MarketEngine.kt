@@ -9,35 +9,84 @@ import kotlin.math.roundToLong
 object MarketEngine {
     private val LN2 = ln(2.0)
     private val DAILY_ZONE = java.time.ZoneId.of("America/Caracas")
+    private val RESET_FORMATTER = java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm")
 
-    private fun ensureDailyDate() {
-        val today = java.time.LocalDate.now(DAILY_ZONE).toString()
-        if (MarketStore.state.dailySellDate != today) {
-            MarketStore.state.dailySellDate = today
-            MarketStore.state.dailyPlayerEarnings.clear()
-            MarketStore.saveState()
+    @Volatile
+    var clientSyncedNextResetMs: Long = 0L
+
+    fun getResetIntervalDays(): Int {
+        val days = MarketStore.config.resetIntervalDays
+        return if (days <= 0) 2 else days.coerceIn(1, 30)
+    }
+
+    fun getResetHourVet(): Int {
+        return MarketStore.config.resetHourVet.coerceIn(0, 23)
+    }
+
+    /**
+     * Calcula la marca de inicio de ciclo (hora configurada en VET) correspondiente a [referenceMs].
+     */
+    fun getCycleAnchorTimestampMs(referenceMs: Long = System.currentTimeMillis()): Long {
+        val resetHour = getResetHourVet()
+        val refZdt = java.time.Instant.ofEpochMilli(referenceMs).atZone(DAILY_ZONE)
+        var anchor = refZdt.toLocalDate().atTime(resetHour, 0).atZone(DAILY_ZONE)
+        if (refZdt.isBefore(anchor)) {
+            anchor = anchor.minusDays(1)
         }
+        return anchor.toInstant().toEpochMilli()
+    }
+
+    fun getLastScheduledResetTimestampMs(nowMs: Long = System.currentTimeMillis()): Long {
+        return getCycleAnchorTimestampMs(nowMs)
+    }
+
+    fun getNextResetTimestampMs(nowMs: Long = System.currentTimeMillis()): Long {
+        val days = getResetIntervalDays().toLong()
+        val lastReset = MarketStore.state.lastResetTimestampMs
+        if (lastReset > 0L) {
+            val anchor = java.time.Instant.ofEpochMilli(getCycleAnchorTimestampMs(lastReset)).atZone(DAILY_ZONE)
+            return anchor.plusDays(days).toInstant().toEpochMilli()
+        }
+        val resetHour = getResetHourVet()
+        val nowZdt = java.time.Instant.ofEpochMilli(nowMs).atZone(DAILY_ZONE)
+        var target = nowZdt.toLocalDate().atTime(resetHour, 0).atZone(DAILY_ZONE)
+        if (!nowZdt.isBefore(target)) {
+            target = target.plusDays(days)
+        }
+        return target.toInstant().toEpochMilli()
+    }
+
+    fun getDisplayNextResetTimestampMs(nowMs: Long = System.currentTimeMillis()): Long {
+        val synced = clientSyncedNextResetMs
+        return if (synced > 0L) synced else getNextResetTimestampMs(nowMs)
+    }
+
+    fun isResetDue(nowMs: Long = System.currentTimeMillis()): Boolean {
+        if (MarketStore.state.lastResetTimestampMs <= 0L) return true
+        return nowMs >= getNextResetTimestampMs(nowMs)
+    }
+
+    fun formatDurationRemaining(diffMs: Long): String {
+        val safe = diffMs.coerceAtLeast(0L)
+        val days = safe / 86400000L
+        val hours = (safe % 86400000L) / 3600000L
+        val mins = (safe % 3600000L) / 60000L
+        return if (days > 0L) "${days}d ${hours}h ${mins}m" else "${hours}h ${mins}m"
+    }
+
+    fun formatTimestampVet(epochMs: Long): String {
+        val zdt = java.time.Instant.ofEpochMilli(epochMs).atZone(DAILY_ZONE)
+        return "${RESET_FORMATTER.format(zdt)} VET"
     }
 
     @Synchronized
     fun remainingDailyCap(playerUuid: java.util.UUID): Long {
-        val cap = MarketStore.config.dailyPlayerSellCap
-        if (cap <= 0L) return Long.MAX_VALUE
-        ensureDailyDate()
-        val earned = MarketStore.state.dailyPlayerEarnings[playerUuid.toString()] ?: 0L
-        return (cap - earned).coerceAtLeast(0L)
+        return Long.MAX_VALUE
     }
 
     @Synchronized
     fun recordDailyEarnings(playerUuid: java.util.UUID, amount: Long) {
-        if (amount <= 0L) return
-        val cap = MarketStore.config.dailyPlayerSellCap
-        if (cap <= 0L) return
-        ensureDailyDate()
-        val key = playerUuid.toString()
-        val prev = MarketStore.state.dailyPlayerEarnings[key] ?: 0L
-        MarketStore.state.dailyPlayerEarnings[key] = (prev + amount).coerceAtMost(cap)
-        MarketStore.saveState()
+        // Sin límite diario de ventas
     }
 
     fun getItemConfig(itemId: String): ItemMarketConfig? {
@@ -111,6 +160,13 @@ object MarketEngine {
         val totalPayout = calculateBatchPayout(config, initialSupply, count, trending)
         val newSupply = initialSupply + count
         MarketStore.state.supply[itemId] = newSupply
+        if (itemId == "minecraft:emerald") {
+            val blockSupply = MarketStore.state.supply["minecraft:emerald_block"] ?: 0.0
+            MarketStore.state.supply["minecraft:emerald_block"] = blockSupply + (count / 9.0)
+        } else if (itemId == "minecraft:emerald_block") {
+            val emeraldSupply = MarketStore.state.supply["minecraft:emerald"] ?: 0.0
+            MarketStore.state.supply["minecraft:emerald"] = emeraldSupply + (count * 9.0)
+        }
         MarketStore.saveState()
 
         val newUnitPrice = calculateUnitPrice(config, newSupply, trending)

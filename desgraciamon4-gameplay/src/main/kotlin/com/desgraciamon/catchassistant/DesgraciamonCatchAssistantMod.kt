@@ -7,9 +7,11 @@ import com.cobblemon.mod.common.api.events.pokemon.PokemonCapturedEvent
 import com.cobblemon.mod.common.api.pokeball.catching.CaptureContext
 import com.cobblemon.mod.common.api.pokemon.PokemonSpecies
 import net.fabricmc.api.ModInitializer
+import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking
+import net.minecraft.commands.Commands
 import net.minecraft.network.chat.Component
 import net.minecraft.server.level.ServerPlayer
 import java.time.Instant
@@ -44,6 +46,34 @@ class DesgraciamonCatchAssistantMod : ModInitializer {
         ServerPlayConnectionEvents.JOIN.register { handler, _, _ -> sendSnapshot(handler.player) }
         ServerPlayNetworking.registerGlobalReceiver(LegendaryCaptureSyncRequest.TYPE) { _, context ->
             context.server().execute { sendSnapshot(context.player()) }
+        }
+        CommandRegistrationCallback.EVENT.register { dispatcher, _, _ ->
+            dispatcher.register(
+                Commands.literal("catchassistant")
+                    .requires { it.hasPermission(2) }
+                    .then(Commands.literal("reload").executes { ctx ->
+                        DesgraciamonConfig.load()
+                        TextCatalog.reload()
+                        ctx.source.sendSuccess({ Component.literal("§aCatch Assistant recargado (enabled=${DesgraciamonConfig.current.enabled}).") }, false)
+                        1
+                    })
+                    .then(Commands.literal("testwebhook").executes { ctx ->
+                        DesgraciamonConfig.load()
+                        val server = ctx.source.server
+                        val senderName = ctx.source.textName
+                        val senderUuid = (ctx.source.entity as? ServerPlayer)?.uuid ?: java.util.UUID(0L, 0L)
+                        val now = Instant.now()
+                        val next = now.plusSeconds(DesgraciamonConfig.current.cooldownHours * 3600L)
+                        ctx.source.sendSuccess({ Component.literal("§eEnviando prueba de webhook a Discord...") }, false)
+                        DiscordWebhookSender.send(server, "Rayquaza (Prueba)", senderName, senderUuid, 384, now, next, true) { ok, info ->
+                            server.execute {
+                                val msg = if (ok) "§aWebhook de Discord respondió correctamente ($info)." else "§cError enviando webhook de Discord: $info"
+                                ctx.source.sendSuccess({ Component.literal(msg) }, false)
+                            }
+                        }
+                        1
+                    })
+            )
         }
         CobblemonEvents.THROWN_POKEBALL_HIT.subscribe(::onPokeballHit)
         CobblemonEvents.POKE_BALL_CAPTURE_CALCULATED.subscribe(::onCaptureCalculated)
@@ -157,7 +187,14 @@ class DesgraciamonCatchAssistantMod : ModInitializer {
                 now,
                 nextCaptureAt,
                 pokemon.shiny
-            )
+            ) { ok, _ ->
+                if (ok) {
+                    server.execute {
+                        record.lastDiscordSent = true
+                        data.setDirty()
+                    }
+                }
+            }
         }
 
         server.playerList.players.forEach(::sendSnapshot)

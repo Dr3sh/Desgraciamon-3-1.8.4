@@ -250,13 +250,12 @@ class AnnouncementsClient : ClientModInitializer {
                         pose.popPose()
 
                         if (hasUnreadContent()) {
-                            val bounce = getLevitateOffsetY()
-                            val exX = (centerX + 1).toInt()
-                            val exY = (centerY - 14 + bounce).toInt()
+                            val exX = (centerX + 2f).toInt()
+                            val exY = (centerY - 15f).toInt()
                             RenderSystem.enableBlend()
                             graphics.pose().pushPose()
-                            graphics.pose().translate(0f, 0f, 1f)
-                            graphics.blit(EXCLAMATION_TEXTURE, exX, exY, 12, 12, 0f, 0f, 64, 64, 64, 64)
+                            graphics.pose().translate(0f, levitateY, 1f)
+                            graphics.blit(EXCLAMATION_TEXTURE, exX, exY, 10, 10, 0f, 0f, 16, 16, 16, 16)
                             graphics.pose().popPose()
                         }
                     }
@@ -281,8 +280,8 @@ class AnnouncementsClient : ClientModInitializer {
         ClientPlayNetworking.registerGlobalReceiver(OpenAdminScreenPayload.TYPE) { payload, context ->
             context.client().execute {
                 when (payload.initialTab) {
-                    "open_inbox" -> Minecraft.getInstance().setScreen(AnnouncementsScreen(true))
-                    "open_missions" -> Minecraft.getInstance().setScreen(AnnouncementsScreen(true))
+                    "open_inbox" -> Minecraft.getInstance().setScreen(AnnouncementsScreen(AnnouncementsScreen.SECTION_ANNOUNCEMENTS))
+                    "open_missions" -> Minecraft.getInstance().setScreen(AnnouncementsScreen(AnnouncementsScreen.SECTION_DAILY))
                     else -> Minecraft.getInstance().setScreen(AnnouncementsAdminScreen(payload.initialTab))
                 }
             }
@@ -338,7 +337,7 @@ class AnnouncementsClient : ClientModInitializer {
     private fun open(client: Minecraft) {
         if (client.player == null || client.connection == null) return
         ClientPlayNetworking.send(BulletinActionPayload("sync", ""))
-        client.setScreen(AnnouncementsScreen(true))
+        client.setScreen(AnnouncementsScreen(AnnouncementsScreen.SECTION_DAILY))
     }
 
     private fun getHudPokeballPos(screenWidth: Int, screenHeight: Int): Pair<Int, Int> {
@@ -362,7 +361,7 @@ class AnnouncementsClient : ClientModInitializer {
 
     private fun getLevitateOffsetY(): Float {
         if (!hasUnreadContent()) return 0f
-        return (sin(System.currentTimeMillis() / 460.0) * 2.4).toFloat()
+        return (sin(System.currentTimeMillis() / 900.0) * 0.85).toFloat()
     }
 
     private fun hasUnreadContent(): Boolean {
@@ -405,12 +404,12 @@ class AnnouncementsClient : ClientModInitializer {
         graphics.pose().popPose()
 
         if (hasUnreadContent()) {
-            val exX = x + 14
-            val exY = (y - 5 + levitateY).toInt()
+            val exX = (cx + 2f).toInt()
+            val exY = (cy - 14f).toInt()
             RenderSystem.enableBlend()
             graphics.pose().pushPose()
-            graphics.pose().translate(0f, 0f, 1f)
-            graphics.blit(EXCLAMATION_TEXTURE, exX, exY, 14, 14, 0f, 0f, 64, 64, 64, 64)
+            graphics.pose().translate(0f, levitateY, 1f)
+            graphics.blit(EXCLAMATION_TEXTURE, exX, exY, 10, 10, 0f, 0f, 16, 16, 16, 16)
             graphics.pose().popPose()
         }
     }
@@ -476,12 +475,21 @@ class AnnouncementsClient : ClientModInitializer {
     }
 }
 
-class AnnouncementsScreen(private var showingMissions: Boolean = true) : Screen(TextCatalog.component("screen.title")) {
+class AnnouncementsScreen(private var activeSection: Int = SECTION_DAILY) : Screen(TextCatalog.component("screen.title")) {
     companion object {
+        const val SECTION_DAILY = 0
+        const val SECTION_MISSIONS = 1
+        const val SECTION_ANNOUNCEMENTS = 2
+
         private const val BASE_W = 440f
         private const val BASE_H = 310f
-        private var hideFinishedMissions: Boolean = true
+        private const val COLOR_DAILY = 0xFF38BDF8.toInt()       // Celeste
+        private const val COLOR_MISSIONS = 0xFFB91C3C.toInt()    // Rojo vino
+        private const val COLOR_ANNOUNCEMENTS = 0xFFF97316.toInt() // Naranja
+        private var showExpiredMissions: Boolean = false
     }
+
+    constructor(showingMissions: Boolean) : this(if (showingMissions) SECTION_DAILY else SECTION_ANNOUNCEMENTS)
 
     private data class ClickRegion(
         val x1: Int,
@@ -502,7 +510,8 @@ class AnnouncementsScreen(private var showingMissions: Boolean = true) : Screen(
         val missionAccent: Int,
         val guildAccent: Int,
         val permanentAccent: Int,
-        val completedAccent: Int
+        val completedAccent: Int,
+        val announcementAccent: Int
     )
 
     private var uiScale = 1.0f
@@ -511,21 +520,48 @@ class AnnouncementsScreen(private var showingMissions: Boolean = true) : Screen(
 
     private var selectedId: String? = null
     private var announcementsScroll = 0
+    private var dailyScroll = 0
     private var missionsScroll = 0
+    private var dailyContentHeight = 0
     private var missionsContentHeight = 0
     private var detailScroll = 0
     private var detailContentHeight = 0
     private val openedAtNanos = System.nanoTime()
+    private var prevSection = activeSection
+    private var sectionSwitchAtNanos = System.nanoTime()
     private val previewModelStates = mutableMapOf<String, FloatingState>()
     private val clickRegions = mutableListOf<ClickRegion>()
     private var hoveredTooltipStack: ItemStack? = null
 
     override fun init() {
         super.init()
-        if (showingMissions) {
-            markAllMissionsRead()
-        } else {
-            markAllAnnouncementsRead()
+        markCurrentSectionRead()
+    }
+
+    private fun switchSection(target: Int) {
+        if (target == activeSection) {
+            selectedId = null
+            detailScroll = 0
+            return
+        }
+        prevSection = activeSection
+        activeSection = target.coerceIn(0, 2)
+        sectionSwitchAtNanos = System.nanoTime()
+        selectedId = null
+        detailScroll = 0
+        when (activeSection) {
+            SECTION_DAILY -> dailyScroll = 0
+            SECTION_MISSIONS -> missionsScroll = 0
+            SECTION_ANNOUNCEMENTS -> announcementsScroll = 0
+        }
+        markCurrentSectionRead()
+    }
+
+    private fun markCurrentSectionRead() {
+        when (activeSection) {
+            SECTION_DAILY -> markDailyMissionsRead()
+            SECTION_MISSIONS -> markManualMissionsRead()
+            SECTION_ANNOUNCEMENTS -> markAllAnnouncementsRead()
         }
     }
 
@@ -535,14 +571,38 @@ class AnnouncementsScreen(private var showingMissions: Boolean = true) : Screen(
             bgBase = parseThemeColor(cfg.bgBaseHex, 0xFF0E1117.toInt()),
             bgCard = parseThemeColor(cfg.bgCardHex, 0xFF161B22.toInt()),
             border = parseThemeColor(cfg.borderHex, 0xFF2D333B.toInt()),
-            dailyAccent = parseThemeColor(cfg.dailyAccentHex, 0xFF38BDF8.toInt()),
+            dailyAccent = COLOR_DAILY,
             textColor = parseThemeColor(cfg.textColorHex, 0xFFE6EDF3.toInt()),
             mutedText = parseThemeColor(cfg.mutedTextColorHex, 0xFF8B949E.toInt()),
-            missionAccent = parseThemeColor(cfg.missionAccentHex, 0xFF38BDF8.toInt()),
+            missionAccent = COLOR_MISSIONS,
             guildAccent = parseThemeColor(cfg.guildAccentHex, 0xFFA78BFA.toInt()),
-            permanentAccent = parseThemeColor(cfg.permanentAccentHex, 0xFF34D399.toInt()),
-            completedAccent = parseThemeColor(cfg.completedAccentHex, 0xFF6E7681.toInt())
+            permanentAccent = COLOR_MISSIONS,
+            completedAccent = parseThemeColor(cfg.completedAccentHex, 0xFF6E7681.toInt()),
+            announcementAccent = COLOR_ANNOUNCEMENTS
         )
+    }
+
+    private fun sectionAccentColor(section: Int, theme: ResolvedTheme): Int = when (section) {
+        SECTION_DAILY -> theme.dailyAccent
+        SECTION_MISSIONS -> theme.missionAccent
+        else -> theme.announcementAccent
+    }
+
+    private fun sectionTransitionProgress(): Float {
+        val raw = ((System.nanoTime() - sectionSwitchAtNanos) / 220_000_000.0f).coerceIn(0f, 1f)
+        val inv = 1f - raw
+        return 1f - inv * inv * inv
+    }
+
+    private fun blendRgb(base: Int, target: Int, t: Float): Int {
+        val k = t.coerceIn(0f, 1f)
+        val a = (base ushr 24) and 0xFF
+        val r0 = (base ushr 16) and 0xFF; val g0 = (base ushr 8) and 0xFF; val b0 = base and 0xFF
+        val r1 = (target ushr 16) and 0xFF; val g1 = (target ushr 8) and 0xFF; val b1 = target and 0xFF
+        val r = (r0 + (r1 - r0) * k).toInt().coerceIn(0, 255)
+        val g = (g0 + (g1 - g0) * k).toInt().coerceIn(0, 255)
+        val b = (b0 + (b1 - b0) * k).toInt().coerceIn(0, 255)
+        return (a shl 24) or (r shl 16) or (g shl 8) or b
     }
 
     private fun markAllAnnouncementsRead() {
@@ -554,15 +614,24 @@ class AnnouncementsScreen(private var showingMissions: Boolean = true) : Screen(
         }
     }
 
-    private fun markAllMissionsRead() {
+    private fun markDailyMissionsRead() {
         val snapshot = BulletinClientData.snapshot
-        val unreadManual = snapshot.document.missions.filter { it.id !in snapshot.state.readMissionIds }
-        val unreadDaily = if (!snapshot.dailyCycle.paused) {
-            snapshot.dailyCycle.slots.mapNotNull { slot ->
-                if (slot.unlocked) slot.mission?.takeIf { it.id !in snapshot.state.readMissionIds } else null
-            }
-        } else emptyList()
-        for (mis in unreadManual + unreadDaily) {
+        if (snapshot.dailyCycle.paused) return
+        val unreadDaily = snapshot.dailyCycle.slots.mapNotNull { slot ->
+            if (slot.unlocked) slot.mission?.takeIf { it.id !in snapshot.state.readMissionIds } else null
+        }
+        for (mis in unreadDaily) {
+            snapshot.state.readMissionIds.add(mis.id)
+            ClientPlayNetworking.send(BulletinActionPayload("missionRead", mis.id))
+        }
+    }
+
+    private fun markManualMissionsRead() {
+        val snapshot = BulletinClientData.snapshot
+        val unreadManual = snapshot.document.missions.filter {
+            it.dailySlot == 0 && it.isPublished() && it.id !in snapshot.state.readMissionIds
+        }
+        for (mis in unreadManual) {
             snapshot.state.readMissionIds.add(mis.id)
             ClientPlayNetworking.send(BulletinActionPayload("missionRead", mis.id))
         }
@@ -585,7 +654,21 @@ class AnnouncementsScreen(private var showingMissions: Boolean = true) : Screen(
         val localMouseY = ((mouseY - renderY) / uiScale).toInt()
 
         val snapshot = BulletinClientData.snapshot
-        val theme = resolveTheme(snapshot)
+        val baseTheme = resolveTheme(snapshot)
+        val tabEase = sectionTransitionProgress()
+        val activeAccent = blendRgb(
+            sectionAccentColor(prevSection, baseTheme),
+            sectionAccentColor(activeSection, baseTheme),
+            tabEase
+        )
+        // Tinte sutil y sobrio del fondo gris con el color de la pestaña activa
+        val theme = baseTheme.copy(
+            bgBase = blendRgb(baseTheme.bgBase, activeAccent, 0.11f),
+            bgCard = blendRgb(baseTheme.bgCard, activeAccent, 0.14f),
+            border = blendRgb(baseTheme.border, activeAccent, 0.28f)
+        )
+        val innerBg = blendRgb(0xFF0B0E14.toInt(), activeAccent, 0.08f)
+
         clickRegions.clear()
         hoveredTooltipStack = null
 
@@ -611,20 +694,19 @@ class AnnouncementsScreen(private var showingMissions: Boolean = true) : Screen(
             matrices.translate(-cx, -cy, 0f)
         }
 
-        // Outer frame & main slate background
+        // Outer frame & tinted slate background
         graphics.fill(left - 1, top - 1, left + panelWidth + 1, top + panelHeight + 1, theme.border)
         graphics.fill(left, top, left + panelWidth, top + panelHeight, theme.bgBase)
 
         // Top header bar
         graphics.fill(left, top, left + panelWidth, top + 26, theme.bgCard)
-        val topAccent = if (showingMissions) theme.dailyAccent else 0xFFF5C842.toInt()
-        graphics.fill(left, top + 26, left + panelWidth, top + 27, topAccent)
+        graphics.fill(left, top + 26, left + panelWidth, top + 27, activeAccent)
 
         val viewingDetails = selectedId != null
         if (viewingDetails) {
             val backHovered = localMouseX in left + 8..left + 84 && localMouseY in top + 4..top + 22
-            graphics.fill(left + 8, top + 4, left + 84, top + 22, if (backHovered) 0xFF212832.toInt() else theme.bgBase)
-            graphics.renderOutline(left + 8, top + 4, 76, 18, if (backHovered) topAccent else theme.border)
+            graphics.fill(left + 8, top + 4, left + 84, top + 22, if (backHovered) blendRgb(theme.bgCard, activeAccent, 0.25f) else theme.bgBase)
+            graphics.renderOutline(left + 8, top + 4, 76, 18, if (backHovered) activeAccent else theme.border)
             graphics.drawCenteredString(font, TextCatalog.component("screen.back"), left + 46, top + 9, theme.textColor)
         } else {
             val titleComp = Component.literal(TextCatalog.string("screen.inbox")).withStyle { it.withBold(true) }
@@ -633,8 +715,9 @@ class AnnouncementsScreen(private var showingMissions: Boolean = true) : Screen(
 
         val unreadAnn = snapshot.document.announcements.count { it.id !in snapshot.state.readIds }
         val unreadManualMis = snapshot.document.missions.count {
-            !it.isExpired() && (it.id !in snapshot.state.readMissionIds ||
-                (it.id in snapshot.state.completedMissions && it.id !in snapshot.state.claimedMissions))
+            it.dailySlot == 0 && it.isPublished() && !it.isExpired() &&
+                (it.id !in snapshot.state.readMissionIds ||
+                    (it.id in snapshot.state.completedMissions && it.id !in snapshot.state.claimedMissions))
         }
         val unreadDailyMis = if (!snapshot.dailyCycle.paused) {
             snapshot.dailyCycle.slots.count { slot ->
@@ -642,27 +725,57 @@ class AnnouncementsScreen(private var showingMissions: Boolean = true) : Screen(
                     (slot.mission.id !in snapshot.state.readMissionIds || (slot.completed && !slot.claimed))
             }
         } else 0
-        val unreadMis = unreadManualMis + unreadDailyMis
 
-        // 2 Main Tabs: Misiones & Anuncios
+        // 3 Secciones: Diarias (Celeste, izq), Misiones (Rojo vino, centro), Anuncios (Naranja, der)
+        val tabW = 136
+        val tabGap = 6
+        val tab1X = left + 10
+        val tab2X = tab1X + tabW + tabGap
+        val tab3X = tab2X + tabW + tabGap
+        val tabY = top + 31
+        val tabH = 20
+
         drawTabButton(
-            graphics, left + 10, top + 31, 128, 20,
-            selected = showingMissions,
-            hovered = localMouseX in left + 10..left + 138 && localMouseY in top + 31..top + 51,
-            label = TextCatalog.component(if (showingMissions) "tab.missions.selected" else "tab.missions"),
-            badgeCount = if (showingMissions) 0 else unreadMis,
+            graphics, tab1X, tabY, tabW, tabH,
+            selected = activeSection == SECTION_DAILY,
+            hovered = localMouseX in tab1X..(tab1X + tabW) && localMouseY in tabY..(tabY + tabH),
+            label = Component.literal("Misiones Diarias"),
+            badgeCount = if (activeSection == SECTION_DAILY) 0 else unreadDailyMis,
             accentColor = theme.dailyAccent,
             theme = theme
         )
         drawTabButton(
-            graphics, left + 144, top + 31, 128, 20,
-            selected = !showingMissions,
-            hovered = localMouseX in left + 144..left + 272 && localMouseY in top + 31..top + 51,
-            label = TextCatalog.component(if (!showingMissions) "tab.announcements.selected" else "tab.announcements"),
-            badgeCount = if (!showingMissions) 0 else unreadAnn,
-            accentColor = 0xFFF5C842.toInt(),
+            graphics, tab2X, tabY, tabW, tabH,
+            selected = activeSection == SECTION_MISSIONS,
+            hovered = localMouseX in tab2X..(tab2X + tabW) && localMouseY in tabY..(tabY + tabH),
+            label = Component.literal("Misiones"),
+            badgeCount = if (activeSection == SECTION_MISSIONS) 0 else unreadManualMis,
+            accentColor = theme.missionAccent,
             theme = theme
         )
+        drawTabButton(
+            graphics, tab3X, tabY, tabW, tabH,
+            selected = activeSection == SECTION_ANNOUNCEMENTS,
+            hovered = localMouseX in tab3X..(tab3X + tabW) && localMouseY in tabY..(tabY + tabH),
+            label = Component.literal("Anuncios"),
+            badgeCount = if (activeSection == SECTION_ANNOUNCEMENTS) 0 else unreadAnn,
+            accentColor = theme.announcementAccent,
+            theme = theme
+        )
+
+        // Barra indicadora deslizante suave bajo la pestaña activa
+        val prevTabX = when (prevSection) {
+            SECTION_DAILY -> tab1X.toFloat()
+            SECTION_MISSIONS -> tab2X.toFloat()
+            else -> tab3X.toFloat()
+        }
+        val currTabX = when (activeSection) {
+            SECTION_DAILY -> tab1X.toFloat()
+            SECTION_MISSIONS -> tab2X.toFloat()
+            else -> tab3X.toFloat()
+        }
+        val indicatorX = (prevTabX + (currTabX - prevTabX) * tabEase).toInt()
+        graphics.fill(indicatorX, tabY + tabH - 2, indicatorX + tabW, tabY + tabH, activeAccent)
 
         if (snapshot.state.adminMode) {
             drawTabButton(
@@ -671,41 +784,30 @@ class AnnouncementsScreen(private var showingMissions: Boolean = true) : Screen(
                 hovered = localMouseX in left + panelWidth - 78..left + panelWidth - 8 && localMouseY in top + 4..top + 22,
                 label = Component.literal("Admin"),
                 badgeCount = 0,
-                accentColor = theme.dailyAccent,
+                accentColor = activeAccent,
                 theme = theme
             )
-        }
-
-        if (showingMissions && selectedId == null) {
-            val cbX = left + 280
-            val cbY = top + 35
-            val cbBoxSize = 12
-            val cbLabel = "Ocultar terminadas"
-            val cbRight = cbX + cbBoxSize + 5 + font.width(cbLabel)
-            val cbHovered = localMouseX in (cbX - 2)..(cbRight + 2) && localMouseY in (cbY - 2)..(cbY + cbBoxSize + 2)
-            graphics.fill(cbX, cbY, cbX + cbBoxSize, cbY + cbBoxSize, if (cbHovered) 0xFF1D232D.toInt() else 0xFF12161D.toInt())
-            graphics.renderOutline(cbX, cbY, cbBoxSize, cbBoxSize, if (hideFinishedMissions || cbHovered) theme.dailyAccent else theme.border)
-            if (hideFinishedMissions) {
-                graphics.fill(cbX + 2, cbY + 2, cbX + cbBoxSize - 2, cbY + cbBoxSize - 2, theme.dailyAccent)
-            }
-            graphics.drawString(font, cbLabel, cbX + cbBoxSize + 5, cbY + 2, if (cbHovered || hideFinishedMissions) theme.textColor else theme.mutedText, false)
-            clickRegions.add(ClickRegion(cbX - 2, cbY - 2, cbRight + 2, cbY + cbBoxSize + 2, requiresViewportBounds = false) {
-                hideFinishedMissions = !hideFinishedMissions
-                missionsScroll = 0
-            })
         }
 
         // Inner panel container
         val innerTop = top + 55
         val innerBottom = top + panelHeight - 15
-        graphics.fill(left + 10, innerTop, left + panelWidth - 10, innerBottom, 0xFF0B0E14.toInt())
+        graphics.fill(left + 10, innerTop, left + panelWidth - 10, innerBottom, innerBg)
         graphics.renderOutline(left + 10, innerTop, panelWidth - 20, innerBottom - innerTop, theme.border)
 
-        if (showingMissions) {
-            renderMissions(graphics, localMouseX, localMouseY, left, top, panelWidth, panelHeight, snapshot, theme, partialTick)
-        } else {
-            renderAnnouncements(graphics, localMouseX, localMouseY, left, top, panelWidth, panelHeight, snapshot, theme)
+        // Deslizamiento fluido lateral al cambiar entre secciones
+        val slideSign = if (activeSection >= prevSection) 1f else -1f
+        val slideOffsetX = if (tabEase < 0.999f) slideSign * (1f - tabEase) * 18f else 0f
+        matrices.pushPose()
+        matrices.translate(slideOffsetX, 0f, 0f)
+        val effMouseX = (localMouseX - slideOffsetX).toInt()
+
+        when (activeSection) {
+            SECTION_DAILY -> renderDailySection(graphics, effMouseX, localMouseY, left, top, panelWidth, panelHeight, snapshot, theme, partialTick)
+            SECTION_MISSIONS -> renderManualMissionsSection(graphics, effMouseX, localMouseY, left, top, panelWidth, panelHeight, snapshot, theme, partialTick)
+            else -> renderAnnouncements(graphics, effMouseX, localMouseY, left, top, panelWidth, panelHeight, snapshot, theme)
         }
+        matrices.popPose()
 
         if (selectedId == null) {
             graphics.drawString(font, TextCatalog.component("screen.scroll"), left + 12, top + panelHeight - 12, theme.mutedText, false)
@@ -735,17 +837,14 @@ class AnnouncementsScreen(private var showingMissions: Boolean = true) : Screen(
         theme: ResolvedTheme
     ) {
         val bg = when {
-            selected -> theme.bgCard
-            hovered -> 0xFF1D232D.toInt()
-            else -> 0xFF12161D.toInt()
+            selected -> blendRgb(theme.bgCard, accentColor, 0.22f)
+            hovered -> blendRgb(theme.bgBase, accentColor, 0.16f)
+            else -> blendRgb(theme.bgBase, 0xFF12161D.toInt(), 0.45f)
         }
         graphics.fill(x, y, x + w, y + h, bg)
         graphics.renderOutline(x, y, w, h, if (selected) accentColor else theme.border)
-        if (selected) {
-            graphics.fill(x, y + h - 2, x + w, y + h, accentColor)
-        }
         val styledLabel = if (selected) label.copy().withStyle { it.withBold(true) } else label
-        graphics.drawString(font, styledLabel, x + 10, y + 6, if (selected) accentColor else theme.mutedText, false)
+        graphics.drawString(font, styledLabel, x + 8, y + 6, if (selected) accentColor else theme.mutedText, false)
         if (badgeCount > 0) {
             val badgeText = badgeCount.toString()
             val bw = maxOf(14, font.width(badgeText) + 6)
@@ -866,7 +965,7 @@ class AnnouncementsScreen(private var showingMissions: Boolean = true) : Screen(
     }
 
     private fun findMissionById(snapshot: ClientBulletinSnapshot, id: String): Mission? {
-        snapshot.document.missions.firstOrNull { it.id == id }?.let { return it }
+        snapshot.document.missions.firstOrNull { it.id == id && it.isPublished() }?.let { return it }
         if (!snapshot.dailyCycle.paused) {
             snapshot.dailyCycle.slots.forEach { slot ->
                 if (slot.unlocked && slot.mission?.id == id) return slot.mission
@@ -875,7 +974,7 @@ class AnnouncementsScreen(private var showingMissions: Boolean = true) : Screen(
         return null
     }
 
-    private fun renderMissions(
+    private fun renderDailySection(
         graphics: GuiGraphics,
         mouseX: Int,
         mouseY: Int,
@@ -893,20 +992,6 @@ class AnnouncementsScreen(private var showingMissions: Boolean = true) : Screen(
             return
         }
 
-        renderMissionsList(graphics, mouseX, mouseY, left, top, panelWidth, panelHeight, snapshot, theme)
-    }
-
-    private fun renderMissionsList(
-        graphics: GuiGraphics,
-        mouseX: Int,
-        mouseY: Int,
-        left: Int,
-        top: Int,
-        panelWidth: Int,
-        panelHeight: Int,
-        snapshot: ClientBulletinSnapshot,
-        theme: ResolvedTheme
-    ) {
         val viewLeft = left + 12
         val viewTop = top + 57
         val viewRight = left + panelWidth - 12
@@ -924,35 +1009,40 @@ class AnnouncementsScreen(private var showingMissions: Boolean = true) : Screen(
         val memberCount = snapshot.state.guildMemberCount.coerceAtLeast(1)
 
         enableVirtualScissor(graphics, viewLeft, viewTop, viewRight, viewBottom)
-        var cursorY = viewTop + 4 - missionsScroll
+        var cursorY = viewTop + 4 - dailyScroll
 
-        // ==================== SECTION 1: MISIONES DIARIAS ====================
+        // ==================== SECCION 1: MISIONES DIARIAS (CELESTE) ====================
         val headerH = 62
         graphics.fill(cardLeft, cursorY, cardRight, cursorY + headerH, theme.bgCard)
         graphics.renderOutline(cardLeft, cursorY, cardW, headerH, theme.dailyAccent)
         graphics.fill(cardLeft, cursorY, cardLeft + 3, cursorY + headerH, theme.dailyAccent)
 
-        drawScaledString(graphics, "MISIONES DIARIAS", cardLeft + 10, cursorY + 6, 1.1f, theme.dailyAccent, bold = true)
+        val titleStr = "MISIONES DIARIAS"
+        val titleScale = 1.1f
+        val titleEndX = cardLeft + 10 + (font.width(titleStr) * titleScale).toInt()
+        drawScaledString(graphics, titleStr, cardLeft + 10, cursorY + 6, titleScale, theme.dailyAccent, bold = true)
 
         val resetLabel = if (isPaused) {
-            Component.literal("PAUSADAS").withStyle { it.withColor(0xFFF59E0B.toInt()).withBold(true) }
+            Component.literal("PAUSADAS").withStyle { it.withColor(0xFFF59E0B.toInt()) }
         } else {
-            Component.literal("Reinicio en: (${formatHms(liveResetSec)})").withStyle { it.withColor(theme.textColor).withBold(true) }
+            Component.literal("Reinicio en: ${formatHms(liveResetSec)}").withStyle { it.withColor(theme.textColor) }
         }
-        val resetW = font.width(resetLabel)
-        graphics.drawString(font, resetLabel, cardRight - resetW - 8, cursorY + 7, theme.textColor, false)
+        val maxResetW = (cardRight - 14 - (titleEndX + 10)).coerceAtLeast(60)
+        val rawResetW = (font.width(resetLabel) + 8).coerceAtLeast(1)
+        val resetScale = if (rawResetW > maxResetW) (maxResetW.toFloat() / rawResetW.toFloat()).coerceIn(0.65f, 1.0f) else 1.0f
+        val scaledResetW = (rawResetW * resetScale).toInt()
+        drawScaledComponent(graphics, resetLabel, cardRight - scaledResetW - 12, cursorY + 7, resetScale, theme.textColor)
 
         graphics.fill(cardLeft + 8, cursorY + 21, cardRight - 8, cursorY + 22, theme.border)
 
-        // Recompensa del Dia (Bonus 3/3) ALWAYS visible in header
         val bonus = cycle.bonus
         val totalSlots = bonus.totalSlots.coerceAtLeast(3)
-        val bonusTitle = Component.literal("Recompensa del Dia").withStyle { it.withBold(true) }
+        val bonusTitle = Component.literal("Recompensa del Día")
         graphics.drawString(font, bonusTitle, cardLeft + 10, cursorY + 26, theme.textColor, false)
 
         val progBadgeText = "${bonus.completedCount}/$totalSlots"
-        val progBadgeX = cardLeft + 10 + font.width(bonusTitle) + 8
-        val progBadgeW = font.width(progBadgeText) + 10
+        val progBadgeX = cardLeft + 10 + font.width(bonusTitle) + 14
+        val progBadgeW = font.width(progBadgeText) + 12
         val bonusReady = !isPaused && bonus.completedCount >= totalSlots && !bonus.claimed
         val progBg = if (bonus.claimed) 0xFF14532D.toInt() else if (bonusReady) 0xFF1E3A2F.toInt() else 0xFF1F242C.toInt()
         val progCol = if (bonus.claimed || bonusReady) 0xFF4ADE80.toInt() else theme.dailyAccent
@@ -960,15 +1050,16 @@ class AnnouncementsScreen(private var showingMissions: Boolean = true) : Screen(
         graphics.renderOutline(progBadgeX, cursorY + 24, progBadgeW, 11, progCol)
         graphics.drawCenteredString(font, progBadgeText, progBadgeX + progBadgeW / 2, cursorY + 26, progCol)
 
-        // Bonus rewards row: money + item icons with x(CANTIDAD)
         var rx = cardLeft + 10
         val ry = cursorY + 41
+        val maxRewardRight = cardRight - 88
         if (bonus.moneyReward > 0L) {
             val moneyComp = Component.literal("$ ${formatMoney(bonus.moneyReward)}").withStyle { it.withColor(0xFFFBBF24.toInt()).withBold(true) }
-            graphics.drawString(font, moneyComp, rx, ry + 3, 0xFFFBBF24.toInt(), false)
-            rx += font.width(moneyComp) + 10
+            if (rx + font.width(moneyComp) <= maxRewardRight) {
+                graphics.drawString(font, moneyComp, rx, ry + 3, 0xFFFBBF24.toInt(), false)
+                rx += font.width(moneyComp) + 10
+            }
         }
-        val maxRewardRight = cardRight - 88
         for (reward in bonus.itemRewards) {
             if (rx + 36 > maxRewardRight) break
             val stack = itemStack(reward.itemId)
@@ -980,11 +1071,12 @@ class AnnouncementsScreen(private var showingMissions: Boolean = true) : Screen(
                 rx += 17
             }
             val qtyStr = "x${reward.count}"
-            graphics.drawString(font, qtyStr, rx, ry + 3, theme.textColor, false)
-            rx += font.width(qtyStr) + 8
+            if (rx + font.width(qtyStr) <= maxRewardRight) {
+                graphics.drawString(font, qtyStr, rx, ry + 3, theme.textColor, false)
+                rx += font.width(qtyStr) + 8
+            }
         }
 
-        // Bonus Claim / Status button on right
         val btnW = 74
         val btnH = 22
         val btnX = cardRight - btnW - 8
@@ -1018,7 +1110,6 @@ class AnnouncementsScreen(private var showingMissions: Boolean = true) : Screen(
         }
         cursorY += headerH + 6
 
-        // 3 Vertical Daily Slots
         val normalizedSlots = (1..3).map { slotNum ->
             cycle.slots.firstOrNull { it.slotIndex == slotNum }
                 ?: DailySlotSnapshot(slotIndex = slotNum, unlocked = false, unlockRemainingSeconds = 0L)
@@ -1026,17 +1117,16 @@ class AnnouncementsScreen(private var showingMissions: Boolean = true) : Screen(
         for (slot in normalizedSlots) {
             val slotMission = slot.mission
             if (isPaused || !slot.unlocked || slotMission == null) {
-                // Locked / Paused slot: muted dark gray card showing ONLY centered countdown HH:MM:SS (or PAUSADA)
                 val lockedH = 40
-                graphics.fill(cardLeft, cursorY, cardRight, cursorY + lockedH, 0xFF14181F.toInt())
-                graphics.renderOutline(cardLeft, cursorY, cardW, lockedH, 0xFF252A33.toInt())
+                graphics.fill(cardLeft, cursorY, cardRight, cursorY + lockedH, blendRgb(0xFF14181F.toInt(), theme.dailyAccent, 0.08f))
+                graphics.renderOutline(cardLeft, cursorY, cardW, lockedH, theme.border)
                 val centerLabel = if (isPaused) {
                     Component.literal("PAUSADA").withStyle { it.withBold(true) }
                 } else {
                     val liveSlotRem = (slot.unlockRemainingSeconds - elapsedSec).coerceAtLeast(0L)
                     Component.literal(formatHms(liveSlotRem)).withStyle { it.withBold(true) }
                 }
-                val labelColor = if (isPaused) 0xFF6E7681.toInt() else 0xFF8B949E.toInt()
+                val labelColor = if (isPaused) 0xFF6E7681.toInt() else theme.mutedText
                 val labelW = (font.width(centerLabel) * 1.15f).toInt()
                 drawScaledComponent(
                     graphics,
@@ -1048,7 +1138,6 @@ class AnnouncementsScreen(private var showingMissions: Boolean = true) : Screen(
                 )
                 cursorY += lockedH + 5
             } else {
-                // Unlocked / Active / Completed / Claimed slot stays in place
                 val slotH = 60
                 val hovered = mouseInsideView && mouseX in cardLeft..cardRight && mouseY in cursorY..cursorY + slotH
                 val readyToClaim = slot.completed && !slot.claimed
@@ -1057,14 +1146,13 @@ class AnnouncementsScreen(private var showingMissions: Boolean = true) : Screen(
                     slot.claimed -> theme.completedAccent
                     else -> theme.dailyAccent
                 }
-                val cardBg = if (hovered) 0xFF1C232D.toInt() else if (slot.claimed) 0xFF131820.toInt() else theme.bgCard
+                val cardBg = if (hovered) blendRgb(theme.bgCard, slotAccent, 0.16f) else if (slot.claimed) 0xFF131820.toInt() else theme.bgCard
                 val cardOutline = if (hovered) slotAccent else if (readyToClaim) 0xFFFBBF24.toInt() else theme.border
 
                 graphics.fill(cardLeft, cursorY, cardRight, cursorY + slotH, cardBg)
                 graphics.renderOutline(cardLeft, cursorY, cardW, slotH, cardOutline)
                 graphics.fill(cardLeft, cursorY, cardLeft + 3, cursorY + slotH, slotAccent)
 
-                // Top-right category tag: (CAPTURA), (ITEMS), (COMBATE), (ESPECIAL)
                 val catText = "(${slotMission.resolvedCategoryTag()})"
                 val catW = font.width(catText) + 8
                 val catX = cardRight - catW - 6
@@ -1072,11 +1160,10 @@ class AnnouncementsScreen(private var showingMissions: Boolean = true) : Screen(
                 graphics.renderOutline(catX, cursorY + 4, catW, 11, slotAccent)
                 graphics.drawString(font, catText, catX + 4, cursorY + 6, slotAccent, false)
 
-                // Title
                 val titleMaxW = (catX - (cardLeft + 10) - 6).coerceAtLeast(40)
                 val titleComp = ClientRichTextHelper.format(
                     slotMission.title,
-                    if (slot.claimed) snapshot.uiTheme.mutedTextColorHex else snapshot.uiTheme.textColorHex,
+                    if (slot.claimed) snapshot.uiTheme.mutedTextColorHex else "#E6EDF3",
                     boldDefault = true
                 )
                 val clippedTitle = font.split(titleComp, titleMaxW).firstOrNull()
@@ -1084,12 +1171,10 @@ class AnnouncementsScreen(private var showingMissions: Boolean = true) : Screen(
                     graphics.drawString(font, clippedTitle, cardLeft + 10, cursorY + 6, theme.textColor, false)
                 }
 
-                // Short description
                 val descText = slotMission.body.ifBlank { "Mision diaria activa" }.replace('\n', ' ')
                 val clippedDesc = font.plainSubstrByWidth(descText, cardW - 20)
                 graphics.drawString(font, clippedDesc, cardLeft + 10, cursorY + 17, theme.mutedText, false)
 
-                // Simple objective + progress
                 val objProgMap = snapshot.state.objectiveProgress[slotMission.id].orEmpty()
                 val fallbackProg = snapshot.state.missionProgress[slotMission.id] ?: 0
                 val summary = CleanMissionDisplay.simpleMissionSummary(slotMission, objProgMap, fallbackProg, memberCount)
@@ -1101,7 +1186,6 @@ class AnnouncementsScreen(private var showingMissions: Boolean = true) : Screen(
                 val clippedSummary = font.plainSubstrByWidth(summary, cardW - 20)
                 graphics.drawString(font, Component.literal(clippedSummary).withStyle { it.withBold(true) }, cardLeft + 10, cursorY + 29, summaryCol, false)
 
-                // Bottom row: Rewards (item icons xN + $ money) + Status
                 val statusLabel = when {
                     slot.claimed -> "RECLAMADA"
                     readyToClaim -> "LISTA PARA RECLAMAR"
@@ -1137,44 +1221,102 @@ class AnnouncementsScreen(private var showingMissions: Boolean = true) : Screen(
             }
         }
 
-        // ==================== SECTION 2: MISIONES PERMANENTES / MANUALES Y DE GREMIO ====================
-        cursorY += 6
-        val permanentMissions = snapshot.document.missions.filter { mis ->
-            mis.dailySlot == 0 && !mis.isExpired() && mis.id !in snapshot.state.claimedMissions
+        dailyContentHeight = (cursorY - (viewTop + 4 - dailyScroll)).coerceAtLeast(0)
+        graphics.disableScissor()
+
+        val maxScroll = (dailyContentHeight - viewHeight).coerceAtLeast(0)
+        if (dailyScroll > maxScroll) dailyScroll = maxScroll
+        drawScrollbar(graphics, viewRight, viewTop, viewBottom, viewHeight, dailyContentHeight, dailyScroll, maxScroll, theme.dailyAccent)
+    }
+
+    private fun renderManualMissionsSection(
+        graphics: GuiGraphics,
+        mouseX: Int,
+        mouseY: Int,
+        left: Int,
+        top: Int,
+        panelWidth: Int,
+        panelHeight: Int,
+        snapshot: ClientBulletinSnapshot,
+        theme: ResolvedTheme,
+        partialTick: Float
+    ) {
+        val selected = selectedId?.let { id -> findMissionById(snapshot, id) }
+        if (selected != null) {
+            renderMissionDetail(graphics, mouseX, mouseY, left, top, panelWidth, panelHeight, snapshot, theme, selected, partialTick)
+            return
+        }
+
+        val viewLeft = left + 12
+        val viewTop = top + 57
+        val viewRight = left + panelWidth - 12
+        val viewBottom = top + panelHeight - 17
+        val viewHeight = (viewBottom - viewTop).coerceAtLeast(1)
+        val cardLeft = viewLeft + 4
+        val cardW = (viewRight - viewLeft - 14).coerceAtLeast(120)
+        val cardRight = cardLeft + cardW
+        val mouseInsideView = mouseX in viewLeft..viewRight && mouseY in viewTop..viewBottom
+        val memberCount = snapshot.state.guildMemberCount.coerceAtLeast(1)
+
+        // ==================== SECCION 2: MISIONES (ROJO VINO) ====================
+        enableVirtualScissor(graphics, viewLeft, viewTop, viewRight, viewBottom)
+        var cursorY = viewTop + 6 - missionsScroll
+
+        val activeMissions = snapshot.document.missions.filter { mis ->
+            mis.dailySlot == 0 && mis.isPublished() && !mis.isExpired() && mis.id !in snapshot.state.claimedMissions
         }
         drawScaledString(
             graphics,
-            "MISIONES PERMANENTES Y DE GREMIO (${permanentMissions.size})",
+            "MISIONES ACTIVAS (${activeMissions.size})",
             cardLeft + 2,
             cursorY,
-            1.05f,
-            theme.permanentAccent,
+            1.08f,
+            theme.missionAccent,
             bold = true
         )
-        cursorY += 12
-        graphics.fill(cardLeft, cursorY, cardRight, cursorY + 1, theme.border)
-        cursorY += 5
 
-        if (permanentMissions.isEmpty()) {
-            graphics.drawString(font, "No hay misiones permanentes o de gremio activas.", cardLeft + 4, cursorY + 2, theme.mutedText, false)
-            cursorY += 18
+        // Casilla "Ver misiones expiradas" movida aqui (desmarcada por defecto)
+        val cbLabel = "Ver misiones expiradas"
+        val cbBoxSize = 11
+        val cbTotalW = cbBoxSize + 5 + font.width(cbLabel)
+        val cbX = cardRight - cbTotalW
+        val cbY = cursorY - 1
+        val cbHovered = mouseInsideView && mouseX in (cbX - 2)..(cardRight + 2) && mouseY in (cbY - 2)..(cbY + cbBoxSize + 2)
+        graphics.fill(cbX, cbY, cbX + cbBoxSize, cbY + cbBoxSize, if (cbHovered) blendRgb(theme.bgCard, theme.missionAccent, 0.25f) else 0xFF12161D.toInt())
+        graphics.renderOutline(cbX, cbY, cbBoxSize, cbBoxSize, if (showExpiredMissions || cbHovered) theme.missionAccent else theme.border)
+        if (showExpiredMissions) {
+            graphics.fill(cbX + 2, cbY + 2, cbX + cbBoxSize - 2, cbY + cbBoxSize - 2, theme.missionAccent)
+        }
+        graphics.drawString(font, cbLabel, cbX + cbBoxSize + 5, cbY + 2, if (cbHovered || showExpiredMissions) theme.textColor else theme.mutedText, false)
+        clickRegions.add(ClickRegion(cbX - 2, cbY - 2, cardRight + 2, cbY + cbBoxSize + 2) {
+            showExpiredMissions = !showExpiredMissions
+            missionsScroll = 0
+        })
+
+        cursorY += 14
+        graphics.fill(cardLeft, cursorY, cardRight, cursorY + 1, theme.border)
+        cursorY += 6
+
+        if (activeMissions.isEmpty()) {
+            graphics.drawString(font, "No hay misiones activas en este momento.", cardLeft + 4, cursorY + 2, theme.mutedText, false)
+            cursorY += 20
         } else {
-            for (mission in permanentMissions) {
+            for (mission in activeMissions) {
                 val hasBody = mission.body.isNotBlank()
-                val cardH = if (hasBody) 60 else 50
+                val remSec = mission.remainingSeconds()
+                val cardH = if (hasBody) 62 else 52
                 val hovered = mouseInsideView && mouseX in cardLeft..cardRight && mouseY in cursorY..cursorY + cardH
                 val completed = mission.id in snapshot.state.completedMissions
                 val baseAccent = when {
                     completed -> 0xFFFBBF24.toInt()
                     mission.isGuildMission -> theme.guildAccent
-                    else -> parseThemeColor(mission.color, theme.permanentAccent)
+                    else -> theme.missionAccent
                 }
 
-                graphics.fill(cardLeft, cursorY, cardRight, cursorY + cardH, if (hovered) 0xFF1C232D.toInt() else theme.bgCard)
+                graphics.fill(cardLeft, cursorY, cardRight, cursorY + cardH, if (hovered) blendRgb(theme.bgCard, baseAccent, 0.16f) else theme.bgCard)
                 graphics.renderOutline(cardLeft, cursorY, cardW, cardH, if (hovered) baseAccent else if (completed) 0xFFFBBF24.toInt() else theme.border)
                 graphics.fill(cardLeft, cursorY, cardLeft + 3, cursorY + cardH, baseAccent)
 
-                // Top-right tag: (CAPTURA), (ITEMS), (COMBATE), (ESPECIAL)
                 val catText = "(${mission.resolvedCategoryTag()})"
                 val catW = font.width(catText) + 8
                 val catX = cardRight - catW - 6
@@ -1182,12 +1324,22 @@ class AnnouncementsScreen(private var showingMissions: Boolean = true) : Screen(
                 graphics.renderOutline(catX, cursorY + 4, catW, 11, baseAccent)
                 graphics.drawString(font, catText, catX + 4, cursorY + 6, baseAccent, false)
 
+                var leftTagX = catX
+                if (remSec != null) {
+                    val timeTag = formatRemainingBadge(remSec)
+                    val tw = font.width(timeTag) + 8
+                    leftTagX -= tw + 4
+                    graphics.fill(leftTagX, cursorY + 4, leftTagX + tw, cursorY + 15, 0xFF23131A.toInt())
+                    graphics.renderOutline(leftTagX, cursorY + 4, tw, 11, 0xFFF59E0B.toInt())
+                    graphics.drawString(font, timeTag, leftTagX + 4, cursorY + 6, 0xFFFDE047.toInt(), false)
+                }
+
                 val guildPrefix = if (mission.isGuildMission) "[Gremio] " else ""
                 val coopSuffix = if (mission.isGuildMission && (mission.targetUsesMemberCount || mission.objectives.any { it.targetUsesMemberCount })) {
-                    " [xMiembro]"
+                    " [x$memberCount]"
                 } else ""
-                val titleMaxW = (catX - (cardLeft + 10) - 6).coerceAtLeast(40)
-                val titleHex = if (mission.isGuildMission) snapshot.uiTheme.guildAccentHex else mission.color.ifBlank { snapshot.uiTheme.permanentAccentHex }
+                val titleMaxW = (leftTagX - (cardLeft + 10) - 6).coerceAtLeast(40)
+                val titleHex = if (mission.isGuildMission) snapshot.uiTheme.guildAccentHex else "#F43F5E"
                 val titleComp = ClientRichTextHelper.format("$guildPrefix${mission.title}$coopSuffix", titleHex, boldDefault = true)
                 val clippedTitle = font.split(titleComp, titleMaxW).firstOrNull()
                 if (clippedTitle != null) {
@@ -1235,11 +1387,10 @@ class AnnouncementsScreen(private var showingMissions: Boolean = true) : Screen(
             }
         }
 
-        // ==================== SECTION 3: MISIONES COMPLETADAS O EXPIRADAS ====================
-        if (!hideFinishedMissions) {
+        if (showExpiredMissions) {
             cursorY += 6
             val finishedMissions = snapshot.document.missions.filter { mis ->
-                mis.dailySlot == 0 && (mis.id in snapshot.state.claimedMissions || mis.isExpired())
+                mis.dailySlot == 0 && mis.isPublished() && (mis.id in snapshot.state.claimedMissions || mis.isExpired())
             }
             drawScaledString(
                 graphics,
@@ -1305,21 +1456,43 @@ class AnnouncementsScreen(private var showingMissions: Boolean = true) : Screen(
             }
         }
 
-        missionsContentHeight = (cursorY - (viewTop + 4 - missionsScroll)).coerceAtLeast(0)
+        missionsContentHeight = (cursorY - (viewTop + 6 - missionsScroll)).coerceAtLeast(0)
         graphics.disableScissor()
 
-        // Clamp scroll in case content shrunk
         val maxScroll = (missionsContentHeight - viewHeight).coerceAtLeast(0)
         if (missionsScroll > maxScroll) missionsScroll = maxScroll
+        drawScrollbar(graphics, viewRight, viewTop, viewBottom, viewHeight, missionsContentHeight, missionsScroll, maxScroll, theme.missionAccent)
+    }
 
-        // Scrollbar
-        if (missionsContentHeight > viewHeight) {
-            val trackX = viewRight - 5
-            graphics.fill(trackX, viewTop + 3, trackX + 3, viewBottom - 3, 0xFF161B22.toInt())
-            val trackH = (viewBottom - viewTop - 6).coerceAtLeast(10)
-            val thumbH = maxOf(14, (trackH * (viewHeight.toFloat() / missionsContentHeight.toFloat())).toInt())
-            val thumbY = viewTop + 3 + ((trackH - thumbH) * (missionsScroll.toFloat() / maxScroll.coerceAtLeast(1).toFloat())).toInt()
-            graphics.fill(trackX, thumbY, trackX + 3, thumbY + thumbH, theme.dailyAccent)
+    private fun drawScrollbar(
+        graphics: GuiGraphics,
+        viewRight: Int,
+        viewTop: Int,
+        viewBottom: Int,
+        viewHeight: Int,
+        contentHeight: Int,
+        scroll: Int,
+        maxScroll: Int,
+        accent: Int
+    ) {
+        if (contentHeight <= viewHeight) return
+        val trackX = viewRight - 5
+        graphics.fill(trackX, viewTop + 3, trackX + 3, viewBottom - 3, 0xFF161B22.toInt())
+        val trackH = (viewBottom - viewTop - 6).coerceAtLeast(10)
+        val thumbH = maxOf(14, (trackH * (viewHeight.toFloat() / contentHeight.toFloat())).toInt())
+        val thumbY = viewTop + 3 + ((trackH - thumbH) * (scroll.toFloat() / maxScroll.coerceAtLeast(1).toFloat())).toInt()
+        graphics.fill(trackX, thumbY, trackX + 3, thumbY + thumbH, accent)
+    }
+
+    private fun formatRemainingBadge(seconds: Long): String {
+        val days = seconds / 86400L
+        val hours = (seconds % 86400L) / 3600L
+        val mins = (seconds % 3600L) / 60L
+        val secs = seconds % 60L
+        return when {
+            days > 0L -> "Quedan ${days}d ${hours}h"
+            hours > 0L -> String.format(Locale.ROOT, "Quedan %02d:%02d:%02d", hours, mins, secs)
+            else -> String.format(Locale.ROOT, "Quedan %02d:%02d", mins, secs)
         }
     }
 
@@ -1476,7 +1649,7 @@ class AnnouncementsScreen(private var showingMissions: Boolean = true) : Screen(
                 cursorY += font.lineHeight + 3
             }
             if (selected.isGuildMission && (selected.targetUsesMemberCount || objective.targetUsesMemberCount)) {
-                val coopStr = "Cooperativa de gremio: escala xMiembro ($memberCount)"
+                val coopStr = "Cooperativa de gremio: escala x$memberCount"
                 graphics.drawString(font, coopStr, left + 26, cursorY, theme.guildAccent, false)
                 cursorY += font.lineHeight + 3
             }
@@ -1563,6 +1736,7 @@ class AnnouncementsScreen(private var showingMissions: Boolean = true) : Screen(
             val textW = (font.width(expComp) * 1.05f).toInt()
             drawScaledComponent(graphics, expComp, barLeft + (barW - textW) / 2, barTop + 7, 1.05f, 0xFFFCA5A5.toInt())
         } else {
+            val remSec = selected.remainingSeconds()
             val statusText = buildString {
                 append(
                     when {
@@ -1573,7 +1747,9 @@ class AnnouncementsScreen(private var showingMissions: Boolean = true) : Screen(
                         else -> TextCatalog.string("mission.permanent")
                     }
                 )
-                if (selected.expirationDate.isNotBlank()) {
+                if (remSec != null) {
+                    append(" | ").append(formatRemainingBadge(remSec)).append(" (Hora VE)")
+                } else if (selected.expirationDate.isNotBlank()) {
                     append(" | Vence: ").append(selected.expirationDate)
                 }
             }
@@ -1910,26 +2086,28 @@ class AnnouncementsScreen(private var showingMissions: Boolean = true) : Screen(
             return true
         }
         if (isAdmin && localY in top + 4..top + 22 && localX in left + panelWidth - 78..left + panelWidth - 8) {
-            ClientPlayNetworking.send(BulletinAdminActionPayload("requestAdminScreen", if (showingMissions) "missions" else "announcements"))
+            val adminTab = if (activeSection == SECTION_ANNOUNCEMENTS) "announcements" else "missions"
+            ClientPlayNetworking.send(BulletinAdminActionPayload("requestAdminScreen", adminTab))
             return true
         }
 
-        // Main 2 Tabs: Misiones & Anuncios
+        // 3 Main Tabs: Diarias | Misiones | Anuncios
+        val tabW = 136
+        val tabGap = 6
+        val tab1X = left + 10
+        val tab2X = tab1X + tabW + tabGap
+        val tab3X = tab2X + tabW + tabGap
         if (localY in top + 31..top + 51) {
-            if (localX in left + 10..left + 138) {
-                showingMissions = true
-                selectedId = null
-                missionsScroll = 0
-                detailScroll = 0
-                markAllMissionsRead()
+            if (localX in tab1X..(tab1X + tabW)) {
+                switchSection(SECTION_DAILY)
                 return true
             }
-            if (localX in left + 144..left + 272) {
-                showingMissions = false
-                selectedId = null
-                announcementsScroll = 0
-                detailScroll = 0
-                markAllAnnouncementsRead()
+            if (localX in tab2X..(tab2X + tabW)) {
+                switchSection(SECTION_MISSIONS)
+                return true
+            }
+            if (localX in tab3X..(tab3X + tabW)) {
+                switchSection(SECTION_ANNOUNCEMENTS)
                 return true
             }
         }
@@ -1955,18 +2133,28 @@ class AnnouncementsScreen(private var showingMissions: Boolean = true) : Screen(
             detailScroll = (detailScroll - (verticalAmount * 18).toInt()).coerceIn(0, maxDetailScroll)
             return true
         }
-        if (showingMissions) {
-            val visibleHeight = (panelHeight - 74).coerceAtLeast(1)
-            val maxScroll = (missionsContentHeight - visibleHeight).coerceAtLeast(0)
-            missionsScroll = (missionsScroll - (verticalAmount * 22).toInt()).coerceIn(0, maxScroll)
-            return true
+        when (activeSection) {
+            SECTION_DAILY -> {
+                val visibleHeight = (panelHeight - 74).coerceAtLeast(1)
+                val maxScroll = (dailyContentHeight - visibleHeight).coerceAtLeast(0)
+                dailyScroll = (dailyScroll - (verticalAmount * 22).toInt()).coerceIn(0, maxScroll)
+                return true
+            }
+            SECTION_MISSIONS -> {
+                val visibleHeight = (panelHeight - 74).coerceAtLeast(1)
+                val maxScroll = (missionsContentHeight - visibleHeight).coerceAtLeast(0)
+                missionsScroll = (missionsScroll - (verticalAmount * 22).toInt()).coerceIn(0, maxScroll)
+                return true
+            }
+            else -> {
+                val listSize = BulletinClientData.snapshot.document.announcements.size
+                val listH = panelHeight - 82
+                val maxRows = (listH / 27).coerceAtLeast(1)
+                val maxScroll = (listSize - maxRows).coerceAtLeast(0)
+                announcementsScroll = (announcementsScroll - verticalAmount.toInt()).coerceIn(0, maxScroll)
+                return true
+            }
         }
-        val listSize = BulletinClientData.snapshot.document.announcements.size
-        val listH = panelHeight - 82
-        val maxRows = (listH / 27).coerceAtLeast(1)
-        val maxScroll = (listSize - maxRows).coerceAtLeast(0)
-        announcementsScroll = (announcementsScroll - verticalAmount.toInt()).coerceIn(0, maxScroll)
-        return true
     }
 
     override fun keyPressed(keyCode: Int, scanCode: Int, modifiers: Int): Boolean {

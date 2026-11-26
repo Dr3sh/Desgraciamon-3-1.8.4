@@ -13,6 +13,6 @@ public class LoadingOverlayMixin {
 
     @Inject(method = "render", at = @At("HEAD"))
     private void onLoadingOverlayRender(GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick, CallbackInfo ci) {
-        VideoPlayerManager.INSTANCE.prewarm();
+        VideoPlayerManager.INSTANCE.prewarmStaticOnly();
     }
 }
