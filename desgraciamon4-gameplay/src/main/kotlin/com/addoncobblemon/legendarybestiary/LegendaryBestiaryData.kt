@@ -203,24 +203,10 @@ class LegendaryBestiaryData private constructor() : SavedData() {
 
         fun getSpeciesLimitInfo(speciesId: String): String {
             val cleanBase = speciesId.substringBefore('#').substringAfter(':').lowercase().replace("_", "").replace("-", "")
-            val formPart = if (speciesId.contains('#')) speciesId.substringAfter('#').lowercase().trim() else ""
-            val isRegional = formPart in setOf("galar", "galarian", "hisui", "hisuian", "alola", "alolan", "paldea", "paldean") ||
-                cleanBase in setOf("articuno", "zapdos", "moltres")
             return when (cleanBase) {
-                "cosmog", "cosmoem" -> "Límite por especie: Máx. 2 (para línea Solgaleo y Lunala)"
-                "kubfu", "urshifu" -> "Límite por especie: Máx. 2 (para estilos Brusco y Fluido)"
-                "necrozma" -> "Límite por especie: Máx. 2 (para fusiones Melena y Alas)"
-                "kyurem" -> "Límite por especie: Máx. 2 (para Kyurem Negro y Blanco)"
-                "calyrex" -> "Límite por especie: Máx. 2 (para Jinete Glacial y Espectral)"
-                "typenull" -> "Límite por especie: Máx. 2 (Código Cero y Silvally)"
-                "zygarde" -> "Límite por especie: Máx. 3 (formas 10%, 50% y Completa)"
-                "deoxys" -> "Límite por especie: Máx. 4 (formas Normal, Ataque, Defensa y Velocidad)"
-                "meltan" -> "Límite por especie: Múltiples permitidos (evolución a Melmetal)"
-                else -> if (isRegional) {
-                    "Límite por especie: Máx. 1 (independiente de su forma regional)"
-                } else {
-                    "Límite por especie: Máx. 1 (2 en líneas ramificadas como Cosmog/Kubfu)"
-                }
+                "cosmog", "cosmoem" -> "Límite global: Máx. 2 compartido (baja a 1/0 con Solgaleo/Lunala)"
+                "articuno", "zapdos", "moltres" -> "Límite global: Máx. 2 en el servidor (Kanto/Galar)"
+                else -> "Límite global: Máx. 1 en todo el servidor"
             }
         }
 

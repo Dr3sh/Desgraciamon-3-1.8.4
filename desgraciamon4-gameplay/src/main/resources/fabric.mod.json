@@ -10,7 +10,8 @@
       "com.addoncobblemon.legendarybestiary.LegendaryBestiaryMod",
       "com.addoncobblemon.legendarycooldown.LegendaryCooldownMod",
       "com.desgraciamon.biomelocator.BiomeLocatorMod",
-      "com.desgraciamon.catchassistant.DesgraciamonCatchAssistantMod"
+      "com.desgraciamon.catchassistant.DesgraciamonCatchAssistantMod",
+      "com.desgraciamon.legendarylimits.LegendaryLimitsMod"
     ],
     "client": [
       "com.addoncobblemon.legendarybestiary.LegendaryBestiaryClient",

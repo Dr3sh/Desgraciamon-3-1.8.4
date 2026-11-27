@@ -1,10 +1,7 @@
 package com.desgraciamon.catchassistant
 
 import com.cobblemon.mod.common.api.events.CobblemonEvents
-import com.cobblemon.mod.common.api.events.pokeball.PokeBallCaptureCalculatedEvent
-import com.cobblemon.mod.common.api.events.pokeball.ThrownPokeballHitEvent
 import com.cobblemon.mod.common.api.events.pokemon.PokemonCapturedEvent
-import com.cobblemon.mod.common.api.pokeball.catching.CaptureContext
 import com.cobblemon.mod.common.api.pokemon.PokemonSpecies
 import net.fabricmc.api.ModInitializer
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback
@@ -75,62 +72,7 @@ class DesgraciamonCatchAssistantMod : ModInitializer {
                     })
             )
         }
-        CobblemonEvents.THROWN_POKEBALL_HIT.subscribe(::onPokeballHit)
-        CobblemonEvents.POKE_BALL_CAPTURE_CALCULATED.subscribe(::onCaptureCalculated)
         CobblemonEvents.POKEMON_CAPTURED.subscribe(::onPokemonCaptured)
-    }
-
-    private fun onPokeballHit(event: ThrownPokeballHitEvent) {
-        if (event.isCanceled) return
-        val player = event.pokeBall.owner as? ServerPlayer ?: return
-
-        val pokemon = event.pokemon.pokemon
-        val path = pokemon.species.resourceIdentifier.path
-        val baseSpeciesName = pokemon.species.name
-        if (pokemon.isUltraBeast() || LegendaryFormHelper.isUltraBeast(path, baseSpeciesName)) return
-        if (!pokemon.isLegendary() && !pokemon.isMythical()) return
-
-        val key = LegendaryFormHelper.getCanonicalSpeciesKey(pokemon)
-        val limit = LegendaryFormHelper.getMaxAllowedForSpecies(key)
-        val owned = LegendaryFormHelper.countPlayerOwnedMatching(player, pokemon)
-
-        if (owned >= limit) {
-            val formName = pokemon.form.name.lowercase().trim()
-            val displayName = if (LegendaryFormHelper.isNotableForm(formName)) {
-                LegendaryFormHelper.getFormDisplayName(baseSpeciesName, formName)
-            } else {
-                baseSpeciesName
-            }
-            val msg = Component.literal("§c¡Ya posees el máximo permitido ($limit) de $displayName!")
-            player.displayClientMessage(msg, true)
-            player.sendSystemMessage(msg)
-            if (event.pokemon.battleId != null) {
-                event.pokeBall.captureFuture.complete(false)
-            }
-            event.cancel()
-        }
-    }
-
-    private fun onCaptureCalculated(event: PokeBallCaptureCalculatedEvent) {
-        val player = event.thrower as? ServerPlayer ?: return
-
-        val pokemon = event.pokemonEntity.pokemon
-        val path = pokemon.species.resourceIdentifier.path
-        val baseSpeciesName = pokemon.species.name
-        if (pokemon.isUltraBeast() || LegendaryFormHelper.isUltraBeast(path, baseSpeciesName)) return
-        if (!pokemon.isLegendary() && !pokemon.isMythical()) return
-
-        val key = LegendaryFormHelper.getCanonicalSpeciesKey(pokemon)
-        val limit = LegendaryFormHelper.getMaxAllowedForSpecies(key)
-        val owned = LegendaryFormHelper.countPlayerOwnedMatching(player, pokemon)
-
-        if (owned >= limit) {
-            event.captureResult = CaptureContext(
-                numberOfShakes = 0,
-                isSuccessfulCapture = false,
-                isCriticalCapture = false
-            )
-        }
     }
 
     private fun onPokemonCaptured(event: PokemonCapturedEvent) {

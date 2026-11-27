@@ -2,19 +2,15 @@ package com.addoncobblemon.legendarybestiary
 
 import com.cobblemon.mod.common.Cobblemon
 import com.cobblemon.mod.common.api.events.CobblemonEvents
-import com.cobblemon.mod.common.api.events.pokeball.PokeBallCaptureCalculatedEvent
-import com.cobblemon.mod.common.api.events.pokeball.ThrownPokeballHitEvent
 import com.cobblemon.mod.common.api.events.pokemon.PokemonCapturedEvent
 import com.cobblemon.mod.common.api.events.pokemon.PokemonGainedEvent
 import com.cobblemon.mod.common.api.events.pokemon.TradeEvent
-import com.cobblemon.mod.common.api.pokeball.catching.CaptureContext
 import com.cobblemon.mod.common.pokemon.Pokemon
 import com.cobblemon.mod.common.util.getPlayer
 import net.fabricmc.api.ModInitializer
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking
-import net.minecraft.network.chat.Component
 import net.minecraft.server.MinecraftServer
 import net.minecraft.server.level.ServerPlayer
 
@@ -32,60 +28,9 @@ class LegendaryBestiaryMod : ModInitializer {
                 sendEntries(context.player())
             }
         }
-        CobblemonEvents.THROWN_POKEBALL_HIT.subscribe(::onPokeballHit)
-        CobblemonEvents.POKE_BALL_CAPTURE_CALCULATED.subscribe(::onCaptureCalculated)
         CobblemonEvents.POKEMON_CAPTURED.subscribe(::onPokemonCaptured)
         CobblemonEvents.TRADE_EVENT_POST.subscribe(::onTradePost)
         CobblemonEvents.POKEMON_GAINED.subscribe(::onPokemonGained)
-    }
-
-    private fun onPokeballHit(event: ThrownPokeballHitEvent) {
-        if (event.isCanceled) return
-        val player = event.pokeBall.owner as? ServerPlayer ?: return
-
-        val pokemon = event.pokemon.pokemon
-        if (pokemon.isUltraBeast() || LegendaryBestiaryData.isUltraBeast(pokemon.species)) return
-        if (!pokemon.isLegendary() && !pokemon.isMythical()) return
-
-        val key = LegendaryBestiaryData.getCanonicalSpeciesKey(pokemon)
-        val limit = LegendaryBestiaryData.getMaxAllowedForSpecies(key)
-        val owned = LegendaryBestiaryData.countPlayerOwnedMatching(player, pokemon)
-
-        if (owned >= limit) {
-            val fName = pokemon.form.name.lowercase().trim()
-            val displayName = if (LegendaryBestiaryData.isNotableForm(fName)) {
-                LegendaryBestiaryData.getFormDisplayName(pokemon.species.name, fName)
-            } else {
-                pokemon.species.name
-            }
-            val msg = Component.literal("§c¡Ya posees el máximo permitido ($limit) de $displayName!")
-            player.displayClientMessage(msg, true)
-            player.sendSystemMessage(msg)
-            if (event.pokemon.battleId != null) {
-                event.pokeBall.captureFuture.complete(false)
-            }
-            event.cancel()
-        }
-    }
-
-    private fun onCaptureCalculated(event: PokeBallCaptureCalculatedEvent) {
-        val player = event.thrower as? ServerPlayer ?: return
-
-        val pokemon = event.pokemonEntity.pokemon
-        if (pokemon.isUltraBeast() || LegendaryBestiaryData.isUltraBeast(pokemon.species)) return
-        if (!pokemon.isLegendary() && !pokemon.isMythical()) return
-
-        val key = LegendaryBestiaryData.getCanonicalSpeciesKey(pokemon)
-        val limit = LegendaryBestiaryData.getMaxAllowedForSpecies(key)
-        val owned = LegendaryBestiaryData.countPlayerOwnedMatching(player, pokemon)
-
-        if (owned >= limit) {
-            event.captureResult = CaptureContext(
-                numberOfShakes = 0,
-                isSuccessfulCapture = false,
-                isCriticalCapture = false
-            )
-        }
     }
 
     private fun onPokemonCaptured(event: PokemonCapturedEvent) {
