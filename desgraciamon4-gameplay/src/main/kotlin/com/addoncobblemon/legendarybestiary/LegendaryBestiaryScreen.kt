@@ -1,6 +1,6 @@
 package com.addoncobblemon.legendarybestiary
 
-import com.cobblemon.mod.common.api.pokemon.PokemonProperties
+import com.cobblemon.mod.common.pokemon.FormData
 import com.cobblemon.mod.common.api.pokemon.PokemonSpecies
 import com.cobblemon.mod.common.api.pokemon.labels.CobblemonPokemonLabels
 import com.cobblemon.mod.common.api.types.ElementalType
@@ -8,7 +8,7 @@ import com.cobblemon.mod.common.client.gui.ProfileTransformType
 import com.cobblemon.mod.common.client.gui.drawProfilePokemon
 import com.cobblemon.mod.common.client.render.models.blockbench.FloatingState
 import com.cobblemon.mod.common.entity.PoseType
-import com.cobblemon.mod.common.pokemon.Pokemon
+import com.cobblemon.mod.common.pokemon.Species
 import com.cobblemon.mod.common.pokemon.RenderablePokemon
 import net.minecraft.client.Minecraft
 import net.minecraft.client.gui.GuiGraphics
@@ -40,7 +40,9 @@ class LegendaryBestiaryScreen : Screen(TextCatalog.component("screen.title")) {
 
     // Selected entry & 3D preview model
     private var selectedSpeciesId: String? = null
-    private var selectedPokemon: Pokemon? = null
+    private var selectedSpecies: Species? = null
+    private var selectedSpeciesRes: ResourceLocation? = null
+    private var selectedForm: FormData? = null
     private var currentAspects: Set<String> = emptySet()
     private var floatingState: FloatingState? = null
     private var isShiny = false
@@ -171,7 +173,7 @@ class LegendaryBestiaryScreen : Screen(TextCatalog.component("screen.title")) {
         val entries = getFilteredEntries()
         if (selectedSpeciesId == null && entries.isNotEmpty()) {
             selectEntry(entries.first())
-        } else if (selectedPokemon == null && selectedSpeciesId != null) {
+        } else if (selectedSpeciesRes == null && selectedSpeciesId != null) {
             updateSelectedPokemon()
         }
     }
@@ -228,46 +230,22 @@ class LegendaryBestiaryScreen : Screen(TextCatalog.component("screen.title")) {
             builtAspects.add("shiny")
         }
 
-        val propStr = buildString {
-            append("species=\"$baseId\" ")
-            if (formName.isNotBlank()) {
-                append("form=\"$formName\" ")
-                when (formName) {
-                    "galar", "galarian" -> append("galarian ")
-                    "hisui", "hisuian" -> append("hisuian ")
-                    "alola", "alolan" -> append("alolan ")
-                    "paldea", "paldean" -> append("paldean ")
-                    else -> append("$formName ")
-                }
-            }
-            if (isShiny) append("shiny=yes ")
-            append("level=50")
+        val res = ResourceLocation.tryParse(if (':' in baseId) baseId else "cobblemon:$baseId")
+        val species = res?.let { PokemonSpecies.getByIdentifier(it) }
+        val matchedForm = species?.forms?.firstOrNull {
+            it.formOnlyShowdownId().equals(formName, true) ||
+            it.name.equals(formName, true) ||
+            it.formOnlyShowdownId().equals(rawForm, true) ||
+            it.name.equals(rawForm, true)
+        }
+        if (matchedForm != null) {
+            builtAspects.addAll(matchedForm.aspects)
         }
 
-        val parsed = runCatching { PokemonProperties.parse(propStr).create() }.getOrNull()
-        val p = parsed ?: runCatching {
-            val res = ResourceLocation.tryParse(baseId) ?: return@runCatching null
-            val species = PokemonSpecies.getByIdentifier(res) ?: return@runCatching null
-            species.create(50).also { it.shiny = isShiny }
-        }.getOrNull()
-
-        if (p != null) {
-            val matchedForm = p.species.forms.firstOrNull {
-                it.formOnlyShowdownId().equals(formName, true) ||
-                it.name.equals(formName, true) ||
-                it.formOnlyShowdownId().equals(rawForm, true) ||
-                it.name.equals(rawForm, true)
-            }
-            if (matchedForm != null) {
-                p.form = matchedForm
-                builtAspects.addAll(matchedForm.aspects)
-            }
-            builtAspects.addAll(p.aspects)
-            p.forcedAspects = builtAspects.toSet()
-        }
-
-        selectedPokemon = p
-        currentAspects = builtAspects
+        selectedSpecies = species
+        selectedSpeciesRes = res
+        selectedForm = matchedForm
+        currentAspects = builtAspects.toSet()
         floatingState = FloatingState().also {
             it.currentAspects = currentAspects
         }
@@ -496,8 +474,8 @@ class LegendaryBestiaryScreen : Screen(TextCatalog.component("screen.title")) {
         guiGraphics.drawString(font, rarityText, rarityX + 4, rarityY + 2, 0xFFFFFFFF.toInt(), false)
 
         var typeX = rarityX + rarityW + 6
-        val effPrimaryType = selectedPokemon?.form?.primaryType ?: selectedPokemon?.primaryType ?: species?.primaryType
-        val effSecondaryType = selectedPokemon?.form?.secondaryType ?: selectedPokemon?.secondaryType ?: species?.secondaryType
+        val effPrimaryType = selectedForm?.primaryType ?: selectedSpecies?.primaryType ?: species?.primaryType
+        val effSecondaryType = selectedForm?.secondaryType ?: selectedSpecies?.secondaryType ?: species?.secondaryType
         effPrimaryType?.let { primaryType ->
             typeX = renderTypePill(guiGraphics, primaryType, typeX, rarityY) + 4
         }
@@ -519,9 +497,10 @@ class LegendaryBestiaryScreen : Screen(TextCatalog.component("screen.title")) {
         guiGraphics.fill((centerX - 34).toInt(), floorY + 3, (centerX + 34).toInt(), floorY + 5, 0x24000000.toInt())
 
         // 3D Model Rendering (Centered in viewport with scissor clipping)
-        val pokemon = selectedPokemon
+        val renderSpecies = selectedSpecies ?: species
+        val renderSpeciesRes = renderSpecies?.resourceIdentifier ?: selectedSpeciesRes ?: res
         val state = floatingState
-        if (pokemon != null && state != null) {
+        if ((renderSpecies != null || renderSpeciesRes != null) && state != null) {
             val modelAreaTop = viewportY + 26
             val modelAreaBottom = viewportY + viewportHeight - 12
             val modelAreaH = modelAreaBottom - modelAreaTop
@@ -538,7 +517,7 @@ class LegendaryBestiaryScreen : Screen(TextCatalog.component("screen.title")) {
                 viewportY + viewportHeight - 2
             )
             try {
-                val aspectsToRender = currentAspects.ifEmpty { pokemon.aspects }
+                val aspectsToRender = currentAspects
                 state.currentAspects = aspectsToRender
 
                 val baseScale = (modelAreaH * 0.28f).coerceIn(28.0f, 42.0f)
@@ -556,21 +535,34 @@ class LegendaryBestiaryScreen : Screen(TextCatalog.component("screen.title")) {
                     0f
                 )
 
-                drawProfilePokemon(
-                    renderablePokemon = RenderablePokemon(pokemon.species, aspectsToRender),
-                    matrixStack = matrices,
-                    rotation = rotation,
-                    poseType = PoseType.PROFILE,
-                    state = state,
-                    partialTicks = partialTick,
-                    scale = baseScale * modelZoom,
-                    profileTransformType = ProfileTransformType.SUMMARY
-                )
+                if (renderSpecies != null) {
+                    drawProfilePokemon(
+                        renderablePokemon = RenderablePokemon(renderSpecies, aspectsToRender),
+                        matrixStack = matrices,
+                        rotation = rotation,
+                        poseType = PoseType.PROFILE,
+                        state = state,
+                        partialTicks = partialTick,
+                        scale = baseScale * modelZoom,
+                        profileTransformType = ProfileTransformType.SUMMARY
+                    )
+                } else if (renderSpeciesRes != null) {
+                    drawProfilePokemon(
+                        species = renderSpeciesRes,
+                        matrixStack = matrices,
+                        rotation = rotation,
+                        poseType = PoseType.PROFILE,
+                        state = state,
+                        partialTicks = partialTick,
+                        scale = baseScale * modelZoom,
+                        profileTransformType = ProfileTransformType.SUMMARY
+                    )
+                }
 
                 matrices.popPose()
                 guiGraphics.flush()
             } catch (t: Throwable) {
-                org.slf4j.LoggerFactory.getLogger("legendary-bestiary").error("Error rendering 3D legendary ${pokemon.species.resourceIdentifier}", t)
+                org.slf4j.LoggerFactory.getLogger("legendary-bestiary").error("Error rendering 3D legendary $renderSpeciesRes", t)
             } finally {
                 guiGraphics.disableScissor()
             }
