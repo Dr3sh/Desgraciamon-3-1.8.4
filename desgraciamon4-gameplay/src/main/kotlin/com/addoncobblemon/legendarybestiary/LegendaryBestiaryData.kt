@@ -9,6 +9,9 @@ import net.minecraft.nbt.CompoundTag
 import net.minecraft.server.MinecraftServer
 import net.minecraft.server.level.ServerPlayer
 import net.minecraft.world.level.saveddata.SavedData
+import net.minecraft.world.level.storage.LevelResource
+import java.nio.file.Files
+import java.util.UUID
 
 data class CaptureRecord(
     val originalOwner: String,
@@ -46,6 +49,102 @@ class LegendaryBestiaryData private constructor() : SavedData() {
         val ts = existing?.capturedAt?.takeIf { it > 0L } ?: capturedAt
         captures[speciesId] = CaptureRecord(orig, currentOwner, ts)
         setDirty()
+    }
+
+    fun reconcileAllPlayers(server: MinecraftServer): Boolean {
+        val uuids = linkedSetOf<UUID>()
+        server.playerList.players.forEach { uuids.add(it.uuid) }
+
+        val playerDataDir = server.getWorldPath(LevelResource.PLAYER_DATA_DIR)
+        if (Files.isDirectory(playerDataDir)) {
+            runCatching {
+                Files.list(playerDataDir).use { stream ->
+                    stream.forEach { path ->
+                        val fileName = path.fileName.toString()
+                        if (fileName.endsWith(".dat")) {
+                            runCatching { UUID.fromString(fileName.removeSuffix(".dat")) }
+                                .getOrNull()
+                                ?.let { uuids.add(it) }
+                        }
+                    }
+                }
+            }
+        }
+
+        val liveOwners = linkedMapOf<String, Pair<String, String?>>()
+        var anyReadFailed = false
+
+        for (uuid in uuids) {
+            val onlinePlayer = server.playerList.getPlayer(uuid)
+            val currentName = onlinePlayer?.name?.string
+                ?: server.profileCache?.get(uuid)?.orElse(null)?.name
+                ?: uuid.toString().substring(0, 8)
+
+            val party = if (onlinePlayer != null) {
+                runCatching { Cobblemon.storage.getParty(onlinePlayer) }.getOrNull()
+            } else {
+                runCatching { Cobblemon.storage.getParty(uuid, server.registryAccess()) }.getOrNull()
+            }
+            val pc = if (onlinePlayer != null) {
+                runCatching { Cobblemon.storage.getPC(onlinePlayer) }.getOrNull()
+            } else {
+                runCatching { Cobblemon.storage.getPC(uuid, server.registryAccess()) }.getOrNull()
+            }
+
+            if (party == null && pc == null) {
+                anyReadFailed = true
+                continue
+            }
+
+            val inspect: (Pokemon) -> Unit = { pokemon ->
+                if (!pokemon.isUltraBeast() && !isUltraBeast(pokemon.species) &&
+                    (pokemon.isLegendary() || pokemon.isMythical())
+                ) {
+                    val baseSpeciesId = pokemon.species.resourceIdentifier.toString()
+                    val formName = pokemon.form.name.lowercase().trim()
+                    val notable = isNotableForm(formName)
+                    val key = if (notable) "$baseSpeciesId#$formName" else baseSpeciesId
+                    val original = pokemon.originalTrainerName?.takeIf { it.isNotBlank() }
+                    liveOwners[key] = currentName to original
+                    if (notable) {
+                        val canonicalForm = normalizeFormKey(formName)
+                        liveOwners["$baseSpeciesId#$canonicalForm"] = currentName to original
+                    }
+                }
+            }
+
+            party?.forEach(inspect)
+            pc?.forEach(inspect)
+        }
+
+        var changed = false
+        val now = System.currentTimeMillis()
+
+        if (!anyReadFailed) {
+            val staleKeys = captures.keys.filter { it !in liveOwners }
+            if (staleKeys.isNotEmpty()) {
+                staleKeys.forEach { captures.remove(it) }
+                changed = true
+            }
+        }
+
+        for ((key, ownerPair) in liveOwners) {
+            val (currentName, original) = ownerPair
+            val existing = captures[key]
+            val orig = original?.takeIf { it.isNotBlank() }
+                ?: existing?.originalOwner?.takeIf { it.isNotBlank() }
+                ?: currentName
+            val ts = existing?.capturedAt?.takeIf { it > 0L } ?: now
+            if (existing == null || existing.currentOwner != currentName || existing.originalOwner != orig || existing.capturedAt != ts) {
+                captures[key] = CaptureRecord(orig, currentName, ts)
+                changed = true
+            }
+        }
+
+        if (changed) {
+            setDirty()
+        }
+        return changed
     }
 
     fun entries(): List<LegendaryBestiaryEntry> {
@@ -277,7 +376,7 @@ class LegendaryBestiaryData private constructor() : SavedData() {
         private fun load(tag: CompoundTag, registries: HolderLookup.Provider): LegendaryBestiaryData {
             val data = LegendaryBestiaryData()
             val records = tag.getCompound("captures")
-            records.allKeys.filterNot { it.contains('#') }.forEach { speciesId ->
+            records.allKeys.filterNot { it.endsWith("#original") || it.endsWith("#capturedAt") }.forEach { speciesId ->
                 val curr = records.getString(speciesId)
                 val orig = if (records.contains("$speciesId#original")) records.getString("$speciesId#original") else curr
                 val ts = records.getLong("$speciesId#capturedAt")

@@ -31,11 +31,27 @@ import net.minecraft.server.level.ServerPlayer
 import java.util.UUID
 
 class LegendaryLimitsMod : ModInitializer {
-    private val speciesSuggestions = SuggestionProvider<CommandSourceStack> { _, builder ->
+    private val allSpeciesSuggestions = SuggestionProvider<CommandSourceStack> { _, builder ->
         SharedSuggestionProvider.suggestResource(
             PokemonSpecies.species.map { it.resourceIdentifier },
             builder
         )
+    }
+
+    private val limitedSpeciesSuggestions = SuggestionProvider<CommandSourceStack> { _, builder ->
+        val trackedIds = linkedSetOf<ResourceLocation>()
+        for (species in PokemonSpecies.species) {
+            val id = species.resourceIdentifier
+            if (LegendaryLimitsConfig.isTrackedSpecies(id.toString(), species)) {
+                trackedIds.add(id)
+            }
+        }
+        for ((rawId, limit) in LegendaryLimitsConfig.current.speciesLimits) {
+            if (limit >= 0) {
+                ResourceLocation.tryParse(rawId)?.let { trackedIds.add(it) }
+            }
+        }
+        SharedSuggestionProvider.suggestResource(trackedIds, builder)
     }
 
     override fun onInitialize() {
@@ -184,9 +200,7 @@ class LegendaryLimitsMod : ModInitializer {
     }
 
     private fun registerCommands(dispatcher: CommandDispatcher<CommandSourceStack>) {
-        for (rootName in listOf("legendarylimit", "llimit")) {
-            dispatcher.register(buildCommandTree(rootName))
-        }
+        dispatcher.register(buildCommandTree("legendarios"))
     }
 
     private fun buildCommandTree(rootName: String) =
@@ -196,20 +210,58 @@ class LegendaryLimitsMod : ModInitializer {
                 Commands.literal("status")
                     .then(
                         Commands.argument("species", ResourceLocationArgument.id())
-                            .suggests(speciesSuggestions)
+                            .suggests(limitedSpeciesSuggestions)
                             .executes { ctx ->
+                                val server = ctx.source.server
                                 val speciesId = resolveArgSpeciesId(ResourceLocationArgument.getId(ctx, "species"))
-                                val status = LegendaryLimitsService.getLimitStatus(ctx.source.server, speciesId)
-                                val ownersStr = if (status.owners.isEmpty()) "Ninguno" else status.owners.joinToString(", ")
-                                val limitStr = if (status.tracked) "${status.currentCount}/${status.effectiveLimit}" else "Sin límite"
-                                val stateStr = if (status.canCapture) "§aCAPTURABLE" else "§cBLOQUEADO"
-                                ctx.source.sendSuccess({
-                                    Component.literal(
-                                        "§e[${status.speciesId}] §f${status.displayName}: $stateStr §7($limitStr)\n" +
-                                            "§7Base: §f${if (status.tracked) status.baseLimit else "N/A"} §7| Dueño(s): §f$ownersStr\n" +
-                                            "§7Detalle: §f${status.note}"
-                                    )
-                                }, false)
+                                val status = LegendaryLimitsService.getLimitStatus(server, speciesId)
+                                val data = LegendaryLimitsData.get(server)
+
+                                val entries = if (speciesId == "cobblemon:cosmog" || speciesId == "cobblemon:cosmoem") {
+                                    data.entriesForSpecies("cobblemon:cosmog") + data.entriesForSpecies("cobblemon:cosmoem")
+                                } else {
+                                    data.entriesForSpecies(speciesId)
+                                }
+
+                                val ownersSummary = if (entries.isEmpty()) {
+                                    "Ninguno"
+                                } else {
+                                    entries.groupBy { it.ownerName.ifBlank { it.ownerUuid.toString().substring(0, 8) } }
+                                        .entries
+                                        .joinToString(", ") { (name, items) ->
+                                            val countPart = if (items.size > 1) " x${items.size}" else ""
+                                            val debugPart = if (items.any { it.isDebug }) " §e[DEBUG]§f" else ""
+                                            "$name$countPart$debugPart"
+                                        }
+                                }
+
+                                val sb = StringBuilder()
+                                sb.append("§6=== Estado: §e${status.displayName} §7(${status.speciesId}) §6===\n")
+                                if (!status.tracked) {
+                                    sb.append("§a✔ Sin límite activo\n")
+                                } else {
+                                    val stateStr = if (status.canCapture) {
+                                        "§a✔ DISPONIBLE PARA CAPTURA"
+                                    } else {
+                                        "§c✖ LÍMITE ALCANZADO (BLOQUEADO)"
+                                    }
+                                    val remaining = (status.effectiveLimit - status.currentCount).coerceAtLeast(0)
+                                    sb.append("$stateStr\n")
+                                    sb.append("§7Cupo global: §f${status.currentCount}/${status.effectiveLimit} §7(Libres: §f$remaining §7| Base: §f${status.baseLimit}§7)\n")
+                                }
+
+                                if (speciesId == "cobblemon:cosmog" || speciesId == "cobblemon:cosmoem") {
+                                    val cosmogCount = data.countSpecies("cobblemon:cosmog")
+                                    val cosmoemCount = data.countSpecies("cobblemon:cosmoem")
+                                    val solgaleoCount = data.countSpecies("cobblemon:solgaleo")
+                                    val lunalaCount = data.countSpecies("cobblemon:lunala")
+                                    sb.append("§7Desglose grupo: §fCosmog=$cosmogCount §7| §fCosmoem=$cosmoemCount §7| §fSolgaleo=$solgaleoCount §7| §fLunala=$lunalaCount\n")
+                                }
+
+                                sb.append("§7Dueño(s) actual(es): §f$ownersSummary\n")
+                                sb.append("§7Regla: §f${status.note}")
+
+                                ctx.source.sendSuccess({ Component.literal(sb.toString()) }, false)
                                 1
                             }
                     )
@@ -221,7 +273,7 @@ class LegendaryLimitsMod : ModInitializer {
                         val data = LegendaryLimitsData.get(server)
                         val entries = data.allEntries()
                         if (entries.isEmpty()) {
-                            ctx.source.sendSuccess({ Component.literal("§7No hay Pokémon registrados actualmente en Legendary Limits.") }, false)
+                            ctx.source.sendSuccess({ Component.literal("§7No hay Pokémon registrados actualmente en /legendarios.") }, false)
                             return@executes 1
                         }
 
@@ -277,7 +329,7 @@ class LegendaryLimitsMod : ModInitializer {
                 Commands.literal("setlimit")
                     .then(
                         Commands.argument("species", ResourceLocationArgument.id())
-                            .suggests(speciesSuggestions)
+                            .suggests(allSpeciesSuggestions)
                             .then(
                                 Commands.argument("limit", IntegerArgumentType.integer(-1))
                                     .executes { ctx ->
@@ -303,7 +355,7 @@ class LegendaryLimitsMod : ModInitializer {
                         Commands.literal("add")
                             .then(
                                 Commands.argument("species", ResourceLocationArgument.id())
-                                    .suggests(speciesSuggestions)
+                                    .suggests(allSpeciesSuggestions)
                                     .executes { ctx ->
                                         executeDebugAdd(ctx.source, ResourceLocationArgument.getId(ctx, "species"), 1)
                                     }
@@ -323,14 +375,14 @@ class LegendaryLimitsMod : ModInitializer {
                                     .executes { ctx ->
                                         val removed = LegendaryLimitsData.get(ctx.source.server).clearAll()
                                         ctx.source.sendSuccess({
-                                            Component.literal("§eSe eliminaron todos los registros ($removed). Usa /llimit resync para reconstruir desde los jugadores.")
+                                            Component.literal("§eSe eliminaron todos los registros ($removed). Usa /legendarios resync para reconstruir desde los jugadores.")
                                         }, true)
                                         1
                                     }
                             )
                             .then(
                                 Commands.argument("species", ResourceLocationArgument.id())
-                                    .suggests(speciesSuggestions)
+                                    .suggests(limitedSpeciesSuggestions)
                                     .executes { ctx ->
                                         val speciesId = resolveArgSpeciesId(ResourceLocationArgument.getId(ctx, "species"))
                                         val removed = LegendaryLimitsData.get(ctx.source.server).removeBySpecies(speciesId)
