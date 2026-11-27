@@ -6,6 +6,7 @@ import com.desgraciamon.badges.TextCatalog
 import net.fabricmc.api.ModInitializer
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback
 import net.fabricmc.fabric.api.event.Event
+import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents
 import net.fabricmc.loader.api.FabricLoader
 import net.minecraft.commands.Commands
 import net.minecraft.network.chat.ClickEvent
@@ -14,17 +15,22 @@ import net.minecraft.network.chat.HoverEvent
 import net.minecraft.network.chat.MutableComponent
 import net.minecraft.network.chat.Style
 import net.minecraft.network.chat.TextColor
+import net.minecraft.resources.ResourceLocation
 import net.minecraft.server.level.ServerPlayer
 import org.slf4j.LoggerFactory
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.Properties
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 class JoinMessagesMod : ModInitializer {
     override fun onInitialize() {
         loadConfig()
         registerVanishIntegration()
+        registerSessionTimePlaceholder()
+        com.desgraciamon.afk.AfkManager.init()
         LOGGER.info("Desgraciamon Join Messages inicializado correctamente con soporte de insignias y formato de chat.")
     }
 
@@ -64,8 +70,57 @@ class JoinMessagesMod : ModInitializer {
         }
     }
 
+    private fun registerSessionTimePlaceholder() {
+        ServerPlayConnectionEvents.JOIN.register { handler, _, _ ->
+            sessionJoinTimes[handler.player.uuid] = System.currentTimeMillis()
+        }
+        ServerPlayConnectionEvents.DISCONNECT.register { handler, _ ->
+            sessionJoinTimes.remove(handler.player.uuid)
+        }
+
+        val placeholdersCls = runCatching { Class.forName("eu.pb4.placeholders.api.Placeholders") }.getOrNull() ?: return
+        runCatching {
+            val handlerCls = Class.forName("eu.pb4.placeholders.api.PlaceholderHandler")
+            val resultCls = Class.forName("eu.pb4.placeholders.api.PlaceholderResult")
+            val registerMethod = placeholdersCls.getMethod("register", ResourceLocation::class.java, handlerCls)
+            val valueMethod = resultCls.getMethod("value", String::class.java)
+
+            val proxy = java.lang.reflect.Proxy.newProxyInstance(
+                handlerCls.classLoader,
+                arrayOf(handlerCls)
+            ) { _, method, args ->
+                if (method.name == "onPlaceholderRequest" && args != null && args.isNotEmpty()) {
+                    val ctx = args[0]
+                    val player = runCatching { ctx.javaClass.getMethod("player").invoke(ctx) as? ServerPlayer }.getOrNull()
+                    val joinedAt = if (player != null) sessionJoinTimes[player.uuid] else null
+                    val totalSec = if (joinedAt != null) ((System.currentTimeMillis() - joinedAt) / 1000L).coerceAtLeast(0L) else 0L
+                    val hours = totalSec / 3600L
+                    val minutes = (totalSec % 3600L) / 60L
+                    val seconds = totalSec % 60L
+                    val formatted = when {
+                        hours > 0L -> "%dh %02dm %02ds".format(hours, minutes, seconds)
+                        minutes > 0L -> "%dm %02ds".format(minutes, seconds)
+                        else -> "${seconds}s"
+                    }
+                    valueMethod.invoke(null, formatted)
+                } else null
+            }
+
+            registerMethod.invoke(null, ResourceLocation.fromNamespaceAndPath("desgraciamon", "session_time"), proxy)
+            LOGGER.info("Placeholder %desgraciamon:session_time% registrado en PlaceholderAPI.")
+        }.onFailure {
+            LOGGER.warn("No se pudo registrar %desgraciamon:session_time% en PlaceholderAPI", it)
+        }
+    }
+
     companion object {
         private val LOGGER = LoggerFactory.getLogger("DesgraciamonJoinMessages")
+        private val sessionJoinTimes = ConcurrentHashMap<UUID, Long>()
+
+        fun getSessionDurationSeconds(uuid: UUID): Long {
+            val joinedAt = sessionJoinTimes[uuid] ?: return 0L
+            return ((System.currentTimeMillis() - joinedAt) / 1000L).coerceAtLeast(0L)
+        }
         private val configPath: Path = Path.of("config", "desgraciamon4-join-messages", "messages.properties")
         private var joinTemplate = "{player} se conectó"
         private var joinColor = 0x3E74D1

@@ -71,10 +71,17 @@ class CustomNamesMod : ModInitializer {
                 baseComp
             }
 
-            return if (player.team != null) {
+            val teamComp = if (player.team != null) {
                 PlayerTeam.formatNameForTeam(player.team, coloredComp)
             } else {
                 coloredComp
+            }
+
+            val afkSuffix = com.desgraciamon.afk.AfkManager.getTabListSuffix(player.uuid)
+            return if (afkSuffix != null) {
+                teamComp.copy().append(afkSuffix)
+            } else {
+                teamComp
             }
         }
     }

@@ -17,7 +17,6 @@
       "com.desgraciamon.auctions.AuctionMod",
       "com.desgraciamon.training.TrainingMod",
       "com.desgraciamon.serverassets.ServerAssetsMod",
-      "com.desgraciamon.antidupe.AntiDupeMod",
       "com.desgraciamon.items.DesgraciamonItemsMod"
     ],
     "client": [
