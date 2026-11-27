@@ -62,8 +62,9 @@ class ItemRestrictionsMod : ModInitializer {
             }
         }
 
-        UseItemCallback.EVENT.register { player, _, hand ->
+        UseItemCallback.EVENT.register { player, world, hand ->
             val stack = player.getItemInHand(hand)
+            if (world.isClientSide) return@register InteractionResultHolder.pass(stack)
             if (isRestricted(player, stack)) {
                 notifyRestrictedItem(player)
                 return@register InteractionResultHolder.fail(stack)
@@ -71,7 +72,8 @@ class ItemRestrictionsMod : ModInitializer {
             InteractionResultHolder.pass(stack)
         }
 
-        UseBlockCallback.EVENT.register { player, _, hand, _ ->
+        UseBlockCallback.EVENT.register { player, world, hand, _ ->
+            if (world.isClientSide) return@register InteractionResult.PASS
             val stack = player.getItemInHand(hand)
             if (isRestricted(player, stack)) {
                 notifyRestrictedItem(player)
@@ -80,7 +82,8 @@ class ItemRestrictionsMod : ModInitializer {
             InteractionResult.PASS
         }
 
-        UseEntityCallback.EVENT.register { player, _, hand, _, _ ->
+        UseEntityCallback.EVENT.register { player, world, hand, _, _ ->
+            if (world.isClientSide) return@register InteractionResult.PASS
             val stack = player.getItemInHand(hand)
             if (isRestricted(player, stack)) {
                 notifyRestrictedItem(player)
@@ -89,7 +92,8 @@ class ItemRestrictionsMod : ModInitializer {
             InteractionResult.PASS
         }
 
-        net.fabricmc.fabric.api.event.player.AttackBlockCallback.EVENT.register { player, _, hand, _, _ ->
+        net.fabricmc.fabric.api.event.player.AttackBlockCallback.EVENT.register { player, world, hand, _, _ ->
+            if (world.isClientSide) return@register InteractionResult.PASS
             val stack = player.getItemInHand(hand)
             if (isRestricted(player, stack)) {
                 notifyRestrictedItem(player)
@@ -98,7 +102,8 @@ class ItemRestrictionsMod : ModInitializer {
             InteractionResult.PASS
         }
 
-        net.fabricmc.fabric.api.event.player.AttackEntityCallback.EVENT.register { player, _, hand, _, _ ->
+        net.fabricmc.fabric.api.event.player.AttackEntityCallback.EVENT.register { player, world, hand, _, _ ->
+            if (world.isClientSide) return@register InteractionResult.PASS
             val stack = player.getItemInHand(hand)
             if (isRestricted(player, stack)) {
                 notifyRestrictedItem(player)
@@ -107,7 +112,8 @@ class ItemRestrictionsMod : ModInitializer {
             InteractionResult.PASS
         }
 
-        net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents.BEFORE.register { _, player, _, _, _ ->
+        net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents.BEFORE.register { world, player, _, _, _ ->
+            if (world.isClientSide) return@register true
             val stack = player.mainHandItem
             if (isRestricted(player, stack)) {
                 notifyRestrictedItem(player)
